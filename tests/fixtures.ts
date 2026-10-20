@@ -34,7 +34,8 @@ export function card(number: number, extra: Partial<Card> = {}): Card {
     parent: null,
     pr: null,
     isSandcastle: false,
-    isStarted: false,
+    session: null,
+    startAs: 'start',
     noStart: null,
     ...extra,
   }

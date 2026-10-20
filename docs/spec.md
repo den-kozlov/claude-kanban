@@ -1,6 +1,6 @@
 # claude-kanban: design spec
 
-Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–4
+Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–5
 of the delivery plan are built (section 12 says what each stage left for later).
 
 A Claude Code mod that shows the GitHub issues of the current repository as a kanban board in a
@@ -28,7 +28,7 @@ Done, Review, In progress, Blocked, then the label columns.
 | Needs info | label `needs-info` |
 | Ready for agent | label `ready-for-agent` (Sandcastle takes these) |
 | Ready for human | label `ready-for-human` |
-| In progress | a live or recorded board session for the issue, a worktree or branch matching `issue-<N>`, or a Sandcastle branch `sandcastle/issue-<N>` (badge `sandcastle`). Until stage 5 a recorded session moves no card (the owner's choice, 2026-10-20): the board cannot tell a live session from an ended one, and a card after `/triage` would stand in In progress for good |
+| In progress | a running board session for the issue (starting, working or waiting), a worktree or branch matching `issue-<N>`, or a Sandcastle branch `sandcastle/issue-<N>` (badge `sandcastle`). An ended session moves no card: after `/triage` the card stands in the column its new labels give (the owner's reason, 2026-10-20, for keeping recorded sessions out until stage 5 could tell a running session from an ended one) |
 | Review | an open PR for the issue (section 6) |
 | Done | closed in the last 7 days; hidden by default, `d` toggles it |
 
@@ -49,10 +49,9 @@ A full card shows:
 - its Priority, when it has one (added in stage 3, so `p` shows what it set);
 - up to three labels (container and column labels excluded);
 - the comment count;
-- a session badge: working / waiting for input / ended (section 8);
+- a session badge: starting / working / waiting for input / ended (section 8; built in stage 5);
 - a PR badge with its CI state, when a PR exists;
-- `started` while the board has a recorded session for it (stage 4; stage 5 replaces it with the
-  session badge).
+- (stage 4 showed `started` for a recorded session; stage 5 replaced it with the session badge).
 
 **Order.** Within a column, by Priority (Urgent → High → Medium → Low → none), then by number
 ascending (oldest first).
@@ -102,15 +101,15 @@ As built (stage 3):
   `Could not set the Priority of #N: <reason>` in a toast and refreshes the board.
 - Where `p`/`P` are off, they show the reason in a toast (for example `<owner> has no Priority
   issue field`), and the hints leave them out.
-- The popup has a `Priority` button (hotkey `p`, it cycles) and a `Clear Priority` button while
-  the issue has one. They show only where Priority is on.
+- In the detail view `p` cycles and `P` clears the Priority of the issue it shows, and the hints
+  name them only where Priority is on.
 
-## 5. Keys and the detail popup
+## 5. Keys and the detail view
 
 | Key | Action |
 |---|---|
 | arrows / mouse click | select a card |
-| `Enter` | open the detail popup |
+| `Enter` | open the detail view of the card |
 | `s` | start the card (section 7) |
 | `o` | open the issue in the browser |
 | `p` / `P` | cycle / clear Priority |
@@ -118,23 +117,41 @@ As built (stage 3):
 | `d` | show / hide Done |
 | `r` | refresh now |
 
-**Detail popup** (a second pane over the board, `Esc` closes it): title, labels, Priority,
-assignees, blockers and parent (each a link that selects that issue), the body as Markdown, the
-last three comments, and buttons Start (`s`), Open in browser (`o`), Priority (`p`).
+**Detail view** (drawn in the board's pane in place of the columns, `Backspace` goes back):
+title, labels, Priority, assignees, parent and blockers (each a link that shows that issue), the
+body, the last three comments; `s` starts, `o` opens in the browser, `p`/`P` set the Priority.
 
-As built (stage 2): the popup is the pane `issue`, opened with `focus` and `closeOnEscape`, so it
-shows as a tab over the board. Its tree is plain elements (`Markdown` for the body and comments,
-a `Button` per link), so the engine scrolls it and `o` presses its button while the popup holds
-the keys. A link loads that issue into the same popup, retitles the tab and asks the board to
-select the card (the `pick` state; the board takes it when the card is in view). The body is cut
-at 20,000 characters and each comment at 4,000 (a code fence the cut leaves open is closed), so
-the popup stays under a drawing's 100,000 characters. `/board` closing the board closes the popup
-too. Start comes with stage 4; Priority came with stage 3 (section 4).
+| Key in the detail view | Action |
+|---|---|
+| `Backspace` | back to the columns |
+| `↑` / `↓` | the next link on screen (the parent, then the blockers), else scroll a line |
+| `PgUp` / `PgDn` / `Space`, `Home` / `End` | scroll |
+| `←` / `→`, `Tab` | the next link, wherever it is |
+| `Enter`, mouse click on a link | show that issue |
+| `s`, `o`, `p` / `P`, `r` | as on the board, for the issue shown |
+
+As built (stage 2, reworked after stage 5): stage 2 drew the issue in a second pane (`issue`,
+opened with `focus` and `closeOnEscape`). The owner found that after `Esc` the board took no keys
+until a click. The engine gives a `Client` the keys only on a click and takes them away when a
+pane takes the focus, and no call gives them back (`$.ui.open` with `focus` gives the pane the
+focus, not its `Client` the keys). `Escape` never reaches a `Client`: it gives the keys to the
+prompt. So the board's `Client` draws the view itself, and `Backspace` closes it.
+- The hooks module loads the issue into the `detail` state, and the board's props carry it;
+  `detail` null means the columns. A link loads that issue and asks the board to select its
+  card (the `pick` state; the board takes it when the card is in view, back on the columns).
+- `hooks/lib/detail-view.ts` makes the lines, cut to the cell. The Markdown shows as plain
+  text: each source line wrapped at words, its indent kept, tabs as four spaces.
+- The body is cut at 10,000 characters and each comment at 2,000 (a code fence the cut leaves
+  open is closed), so the props stay under 100,000 characters with the board beside them.
+- The status bar names the issue and the lines in view, and the view's keys. The hints show
+  always: the board cannot tell whether a click gave its `Client` the keys (the pane's
+  `isFocused` is the pane's focus, which a click on the `Client` takes away).
+- `/board` closing the board closes the view: the board opens again on its columns.
 
 ## 6. Data and refresh
 
 - GitHub: every 60 seconds and on `r`. Local state: every 2–3 seconds (built: branches and
-  worktrees every 3 s; session records wait for stage 5).
+  worktrees every 3 s, with the session reports since stage 5).
 - `gh` runs through `$.process.run` (no shell; 30 s default timeout). `gh api graphql` fails now and
   then with `Post https://api.github.com/graphql: EOF`: retry with backoff, keep the last good data
   on screen.
@@ -149,7 +166,7 @@ too. Start comes with stage 4; Priority came with stage 3 (section 4).
 
 ## 7. Starting a card
 
-`s` (or Start in the popup) opens a new interactive Claude session for the issue, visible at once.
+`s` (on the board or in the detail view) opens a new interactive Claude session for the issue, visible at once.
 The board never writes to GitHub when it starts a card; the skills do what they need (assignees,
 comments, labels).
 
@@ -172,12 +189,12 @@ worktree and no branch.
 **Other columns.**
 - In progress, Review: a live session → focus its tab; otherwise a new tab with
   `claude --resume <uuid>` in the repo root (the last recorded session of the issue).
-- Blocked, Needs info, Ready for agent, Done: no start (the key does nothing; the popup shows the
-  button disabled with the reason).
+- Blocked, Needs info, Ready for agent, Done: no start (the key does nothing; the detail view shows
+  the reason).
 
 As built (stage 4):
-- `s` on the board and `Start` (hotkey `s`) in the popup. A card that does not start says why in
-  a toast; the popup draws `Start: <reason>` in place of the button. Until stage 5, `s` on an In
+- `s` on the board and in the detail view. A card that does not start says why in a toast; the
+  detail view draws `Start: <reason>` under its header line. Until stage 5, `s` on an In
   progress or Review card does nothing but say so (the owner's choice, 2026-10-20): focusing a
   live session and resuming the last one need session tracking.
 - The prompt comes from the `launch` rules of the config (section 10), the first that matches.
@@ -199,6 +216,19 @@ As built (stage 4):
 - A toast says where the session started and with which prompt; a failure says why. A second `s`
   while the tab opens does nothing.
 
+As built (stage 5):
+- `s` on a card whose session runs (starting, working, waiting) brings its tab forward, in any
+  column: `orca terminal switch --terminal <handle>`, or in iTerm a script that selects the
+  session with the id the new-tab script answered (`id of current session`). A closed iTerm tab
+  says so in a toast.
+- `s` on an In progress or Review card whose sessions ended resumes the last one: a new tab with
+  `KANBAN_BOARD_SESSION=<record id> claude --resume <id>` in the repository root, the id being the
+  one the session last reported (a `/clear` changes it). The record gets the new tab and time.
+- In progress or Review with no board session (a branch, a PR): `s` says so and does nothing.
+- A card in a label column whose session ended starts a new one with its prompt, as in stage 4.
+- The detail view's hints say what `s` does: start, focus session or resume session; its
+  header line names the session's state.
+
 ## 8. Session tracking
 
 - The board records `{issue → [sessionId, terminal handle, startedAt]}` per repository.
@@ -209,6 +239,27 @@ As built (stage 4):
 - Storage: `$.store` if it is shared between concurrent sessions of the plugin (verify first);
   otherwise a JSON file per session under the plugin's data directory, written atomically.
 - No notifications in the first version (Orca shows waiting agents itself).
+
+As built (stage 5):
+- `$.store` is shared: it is one JSON file per plugin, which the engine reads again on each get
+  and locks for each set (read in the engine's code, 2.1.304). A set replaces one key, so each key
+  has one writer: the board writes `sessions:<owner/repo>`, each session its own `live:<id>`.
+- The session learns it is tracked from its environment, not from its id: the board's command is
+  `KANBAN_BOARD_SESSION=<record id> claude …`. The reporter reads it with `$.env.get` at
+  `session.start`, in an interactive session only (a `claude -p` the session runs inherits the
+  variable and stays silent). So a resumed or `/clear`ed session reports under the same record.
+- The report: `live:<record id>` → `{state, at, sessionId}`, `state` one of `working`, `waiting`,
+  `ended`. `turn.start` of the main loop → working; its `turn.complete` → waiting;
+  `classic.PermissionRequest` (the permission prompt) → waiting; `classic.PostToolUse` during a
+  turn → working (the person answered); `session.end` → ended, except after `/clear`. Subagents'
+  turns do not count. A write goes only when the state changes, plus a heartbeat every 10 s.
+- The board reads the reports with the branches (every 3 s) and the records at each refresh. A
+  session with no report reads as `starting` for 60 s after the board opened its tab, then as
+  ended; a report older than 30 s reads as ended; a report from before the tab opened (before a
+  resume) counts as none.
+- A card shows the state of the session that needs the person first: waiting, working,
+  starting, ended. A running one puts the card in In progress (section 2).
+- A record that falls off the last five of its issue takes its report along.
 
 ## 9. Issue query
 
@@ -241,8 +292,8 @@ query($owner:String!,$name:String!,$endCursor:String){
 ```
 
 Count open blockers from `blockedBy.nodes` where `state == OPEN` (the meaning of
-`issueDependenciesSummary.blockedBy` is unconfirmed). The body and comments of the popup come from
-a separate query when the popup opens (built: `repository.issue(number:)` with `body`, `url`,
+`issueDependenciesSummary.blockedBy` is unconfirmed). The body and comments of the detail view come
+from a separate query when the view opens (built: `repository.issue(number:)` with `body`, `url`,
 `state`, `assignees`, `blockedBy{number title state}`, `parent{number title state}`,
 `issueFieldValues` and `comments(last:3)`; `number` goes as `-F` so it is an `Int!`).
 
@@ -290,7 +341,7 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 ## 12. Delivery plan
 
 1. Read-only board: query, column rules, cards, order, collapse, scroll, layout, `/board`, `r`, `o`, `d`, `f`.
-2. Detail popup.
+2. Detail view.
 3. Priority: read, `p`/`P` writes.
 4. Starting cards: prompts, Orca tab, iTerm fallback, session records.
 5. Session tracking: the reporter in parallel sessions, badges, focus/resume.
@@ -298,22 +349,23 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 
 | Stage | State | Built | Left for later |
 |---|---|---|---|
-| 1. Read-only board | done | Sections 2, 3 (without the session badge), 6 and 9; keys arrows/click, `o`, `r`, `d`, `f`; Priority read and card order | The session badge (stage 5); session records in In progress (stage 5) |
-| 2. Detail popup | done | Section 5's popup: `Enter`, the fields, links that select, Markdown body, the last three comments, Open in browser (`o`), `Esc`; Start (stage 4) | — |
-| 3. Priority | done | Section 4: read (stage 1), field and option ids by name, `p`/`P` on the board and in the popup, the move at once, revert with a toast, off without the field; the Priority on full cards | — |
-| 4. Starting cards | done | Section 7: `s` and the popup's Start, the prompts from `launch` rules, the repository root, the Orca tab, the iTerm tab, session records in `$.store`, the `started` badge | In progress and Review: focus or resume (stage 5); records moving cards to In progress (stage 5) |
-| 5. Session tracking | not started | — | Everything in section 8; badges on cards |
+| 1. Read-only board | done | Sections 2, 3 (without the session badge), 6 and 9; keys arrows/click, `o`, `r`, `d`, `f`; Priority read and card order | — (the session badge and sessions in In progress came with stage 5) |
+| 2. Detail view | done | Section 5's view: `Enter`, the fields, links that select, the body, the last three comments, Open in browser (`o`), `Backspace`; Start (stage 4). First a pane of its own, drawn in the board after stage 5 | — |
+| 3. Priority | done | Section 4: read (stage 1), field and option ids by name, `p`/`P` on the board and in the detail view, the move at once, revert with a toast, off without the field; the Priority on full cards | — |
+| 4. Starting cards | done | Section 7: `s` on the board and in the detail view, the prompts from `launch` rules, the repository root, the Orca tab, the iTerm tab, session records in `$.store`, the `started` badge | — (focus, resume and In progress came with stage 5) |
+| 5. Session tracking | done | Section 8: the reporter in the started sessions, the session badge on cards and in the detail view, a running session in In progress, `s` focusing its tab or resuming the last session | Notifications (not planned) |
 | 6. Configuration file | not started | `Config` and `DEFAULT_CONFIG` in `hooks/lib/model.ts` hold section 10's shape, `launch` included | Reading `.claude/kanban.json` and merging it over the defaults |
 
 ## 13. Open checks for implementation
 
 Learned while building stages 1–4:
-- A `Client` gets keys only after the person clicks it; `Escape` gives them back.
+- A `Client` gets keys only after the person clicks it; `Escape` gives them back to the prompt
+  and never reaches the `Client`. A pane that takes the focus takes the keys from the `Client`,
+  and nothing but a click gives them back (section 5).
 - The engine's diff panel (`/diff`) takes the dock: a mod pane stays open and placed but is not
   drawn while it shows.
-- The owner checked the popup by hand in a live session on 2026-10-20: it works. The board's
-  selection does not depend on the board's `Client` keeping its state while the popup covers it:
-  the popup's `pick` selects the issue it last showed.
+- The owner checked the detail popup by hand in a live session on 2026-10-20: it worked, but
+  after `Esc` the board needed a click for its keys. The detail view in the board replaced it.
 - The Priority writes: the tests cover them with a fake `gh`; the field read was checked live
   against an organization with the field. The owner checked the writes and the 2 s wait
   in a live session on 2026-10-20: they work.
@@ -322,11 +374,19 @@ Learned while building stages 1–4:
 - `orca terminal switch --terminal <handle>` focuses an existing Orca tab by its handle.
 - `claude --help` lists `--session-id <uuid>`, `-n, --name <name>` and the positional prompt
   together; `--resume <id>` takes a session id.
-- To check by hand: `s` in Orca and in iTerm, that the new session starts with its name and
-  prompt.
+- The owner checked `s` in Orca and in iTerm in a live session on 2026-10-20: the new session
+  starts with its name and prompt.
+- `$.store` is shared between concurrent sessions (section 8, as built).
+- The permission prompt is `classic.PermissionRequest`; a function hook hears it with no settings
+  hook configured.
+- The iTerm scripts compile (`osacompile`); running them from the sandboxed shell timed out on
+  the Apple Events permission, so the focus by session id waits for a hand check.
 
-Still open:
+To check by hand (stage 5):
 
-- Is `$.store` shared between concurrent sessions of one plugin? (Stage 4 writes it from the board
-  alone and reads it again before each write.)
-- Is there a hook for permission prompts?
+- In Orca: `s` on a Triage card. The card goes to In progress with `starting`, then `working`,
+  then `waiting for input` when the turn ends; a permission prompt in that session shows
+  `waiting for input` too. `s` on it again brings its tab forward.
+- Exit the session (`/exit`): the card shows `ended` and goes back to its label column.
+- On an In progress or Review card with an ended session: `s` resumes it in a new tab.
+- The same in iTerm, focus included.

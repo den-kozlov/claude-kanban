@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
-import type { Board, BoardMessage, BoardProps, BoardStatus, Detail, Priority, PriorityAction } from '../types'
+import type { Board, BoardMessage, BoardProps, BoardStatus, Detail, Priority, PriorityAction, SessionState } from '../types'
 import { detailOf } from './lib/detail'
 import {
   fetchIssue,
@@ -14,10 +14,19 @@ import {
   writePriority,
   type Shell,
 } from './lib/github'
-import { claudeCommand, itermArgv, orcaArgv, orcaHandleOf, sessionName } from './lib/launch'
+import {
+  claudeCommand,
+  focusArgv,
+  ITERM_MISSING,
+  itermArgv,
+  itermIdOf,
+  orcaArgv,
+  orcaHandleOf,
+  resumeCommand,
+  sessionName,
+} from './lib/launch'
 import {
   buildBoard,
-  COLUMNS,
   DEFAULT_CONFIG,
   launchIn,
   nextPriority,
@@ -25,16 +34,33 @@ import {
   type PriorityField,
   type Snapshot,
 } from './lib/model'
-import { drawPopup, popupTitle } from './popup'
+import {
+  HEARTBEAT_MS,
+  issueSessionOf,
+  recordsKey,
+  recordsOf,
+  reportKey,
+  reportOf,
+  STALE_MS,
+  withRecord,
+  withReopened,
+  type Records,
+  type Report,
+  type Terminal,
+} from './lib/sessions'
 
 const PANE = 'board'
-/** The detail popup: a second pane, shown over the board while open. */
-const POPUP = 'issue'
 const LOCAL_POLL_MS = 3000
 /** How long `p`/`P` wait after the last press before they write: the cycle is a roulette. */
 const PRIORITY_DELAY_MS = 2000
 
-const board = atom({ plugin: 'kanban-board', key: 'board' } as const, null)
+/**
+ * `$.state` outlives a reload, so a board the old code built would reach the new code's layout.
+ * Change the tag whenever `Card` or `Board` changes: the new code then reads no board until it
+ * builds one.
+ */
+const BOARD_SHAPE = 'stage-5'
+const board = atom({ plugin: 'kanban-board', key: 'board' } as const, null, { shape: BOARD_SHAPE })
 const status = atom({ plugin: 'kanban-board', key: 'status' } as const, { isLoading: false, error: null })
 const pick = atom({ plugin: 'kanban-board', key: 'pick' } as const, null)
 const detail = atom({ plugin: 'kanban-board', key: 'detail' } as const, null)
@@ -44,12 +70,13 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 function isBoardMessage(data: unknown): data is BoardMessage {
   if (typeof data !== 'object' || data === null) return false
   const message = data as { type?: unknown; number?: unknown }
-  if (message.type === 'refresh') return true
+  if (message.type === 'refresh' || message.type === 'back') return true
   if (!Number.isInteger(message.number)) return false
   if (message.type === 'start') return true
   if (message.type === 'priority') {
-    const { action } = data as { action?: unknown }
-    return action === 'cycle' || action === 'clear'
+    const { action, current } = data as { action?: unknown; current?: unknown }
+    const isPriority = current === null || ['Urgent', 'High', 'Medium', 'Low'].includes(current as string)
+    return (action === 'cycle' || action === 'clear') && isPriority
   }
   return message.type === 'open' || message.type === 'detail'
 }
@@ -60,14 +87,20 @@ function isBoardMessage(data: unknown): data is BoardMessage {
  */
 type Override = { priority: Priority | null; readAfter: number | null }
 
-/** A session the board started (spec section 8); `terminal` is Orca's handle, null in iTerm. */
-type SessionRecord = { sessionId: string; terminal: string | null; startedAt: number }
+/** A tab the board opened: in which app, and the id that brings it forward later. */
+type Tab = { app: 'Orca' | 'iTerm'; terminal: Terminal | null }
 
-/** The records of one repository by issue number, kept in `$.store` under `sessions:<owner/repo>`. */
-type Records = Record<string, SessionRecord[]>
-
-/** The records kept per issue: the last few are enough to resume. */
-const RECORDS_PER_ISSUE = 5
+/**
+ * What a session the board started says of itself (spec section 8): its
+ * state and the write that keeps its report fresh. `isInTurn` tells a tool
+ * after a permission prompt (working again) from one after the turn.
+ */
+type Reporter = {
+  state: Report['state']
+  isInTurn: boolean
+  write: () => Promise<void>
+  timer: Timer
+}
 
 /** What the background work needs of the session, bound at `session.start`. */
 type Host = Shell & {
@@ -76,14 +109,13 @@ type Host = Shell & {
   after: (ms: number, fn: () => void) => Timer
   setBoard: (value: Board) => Promise<unknown>
   setStatus: (value: BoardStatus) => Promise<unknown>
-  setDetail: (value: Detail) => Promise<unknown>
+  setDetail: (value: Detail | null) => Promise<unknown>
   updateDetail: (fn: (value: Detail | null) => Detail | null) => Promise<unknown>
   readStore: (key: string) => Promise<unknown>
   writeStore: (key: string, value: unknown) => Promise<void>
+  deleteStore: (key: string) => Promise<void>
   /** Asks the board to select the card. */
   pick: (number: number) => Promise<unknown>
-  /** Opens the popup, or retitles it when it is open. */
-  openPopup: (title: string) => Promise<unknown>
   toast: (text: string) => void
 }
 
@@ -101,7 +133,7 @@ export const register: Register = on => {
   let isRefreshing = false
   // Why the board's Client last failed; the pane then draws the reason instead.
   let fault: string | null = null
-  // Grows with each issue the popup asks for: a slower, older load is dropped.
+  // Grows with each issue the detail view asks for: a slower, older load is dropped.
   let detailTicket = 0
   // The owner's Priority field: undefined until read, null when the owner has none.
   let priorityField: PriorityField | null | undefined
@@ -116,11 +148,17 @@ export const register: Register = on => {
   let refreshes = 0
   // `TERM_PROGRAM` of this session: `Orca` starts cards in an Orca tab, anything else in iTerm.
   let termProgram: string | undefined
-  // The sessions the board started, once read from the store; null until then.
+  // The sessions the board started, read from the store at each refresh; null until the first.
   let records: Records | null = null
-  // Cards being started: a second `s` before the tab opens does nothing.
+  // The last report of each of those sessions, by record id: read with the branches.
+  let reports = new Map<string, Report>()
+  // The session states the board last showed, to publish again only when one changes.
+  let shownSessions = ''
+  // Cards being started, focused or resumed: a second `s` before the tab opens does nothing.
   const starting = new Set<number>()
-  // The node ids of issues the popup loaded that the board does not hold (containers' parents, old issues).
+  // This session's own report, when the board started it; null in every other session.
+  let reporter: Reporter | null = null
+  // The node ids of issues the detail view loaded that the board does not hold (containers' parents, old issues).
   const loadedIds = new Map<number, string>()
 
   const priorityOff = (): string | null => {
@@ -130,20 +168,41 @@ export const register: Register = on => {
     return priorityError === null ? 'Priority is not read yet' : `Priority could not be read: ${priorityError}`
   }
 
-  const startedIssues = () => new Set(Object.keys(records ?? {}).map(Number))
+  const loadRecords = async (to: Host, at: string): Promise<Records> => recordsOf(await to.readStore(recordsKey(at)))
 
-  const loadRecords = async (to: Host, at: string): Promise<Records> => {
-    const stored = await to.readStore(`sessions:${at}`)
-    return typeof stored === 'object' && stored !== null ? (stored as Records) : {}
+  /** The records changed as `change` says, read again first: another board may have written since. */
+  const saveRecords = async (to: Host, at: string, change: (kept: Records) => Records) => {
+    const kept = change(await loadRecords(to, at))
+    await to.writeStore(recordsKey(at), kept)
+    records = kept
+  }
+
+  const readReports = async (to: Host) => {
+    const ids = Object.values(records ?? {}).flatMap(list => list.map(one => one.sessionId))
+    const read = await Promise.all(ids.map(async id => [id, reportOf(await to.readStore(reportKey(id)))] as const))
+    reports = new Map(read.flatMap(([id, report]) => (report === null ? [] : [[id, report] as const])))
+  }
+
+  const issueSession = (number: number, now: number) => issueSessionOf(records?.[String(number)] ?? [], reports, now)
+
+  const sessionStates = (now: number) => {
+    const states = new Map<number, SessionState>()
+    for (const number of Object.keys(records ?? {}).map(Number)) {
+      const state = issueSession(number, now)?.state
+      if (state !== undefined) states.set(number, state)
+    }
+    return states
   }
 
   const publish = async (to: Host) => {
     if (snapshot === null) return
     const shown = new Map([...overrides].map(([number, one]) => [number, one.priority]))
+    const sessions = sessionStates(await to.now())
+    shownSessions = JSON.stringify([...sessions])
     lastBoard = buildBoard(snapshot, branches, config, fetchedAt, {
       overrides: shown,
       priorityOff: priorityOff(),
-      started: startedIssues(),
+      sessions,
     })
     await to.setBoard(lastBoard)
   }
@@ -169,7 +228,8 @@ export const register: Register = on => {
                 priorityError = messageOf(error)
               },
             )
-      records ??= await loadRecords(to, at)
+      records = await loadRecords(to, at)
+      await readReports(to)
       const [fetched, local] = await Promise.all([
         fetchSnapshot(to, cwd, at, config.doneDays, now),
         readBranches(to, cwd),
@@ -192,22 +252,22 @@ export const register: Register = on => {
     }
   }
 
+  /** The branches and the sessions' reports: the card moves when either changes. */
   const pollLocal = async (to: Host) => {
     if (snapshot === null) return
     const local = await readBranches(to, cwd).catch(() => branches)
-    if (local.join('\n') === branches.join('\n')) return
+    await readReports(to).catch(() => undefined)
+    const sessions = JSON.stringify([...sessionStates(await to.now())])
+    if (local.join('\n') === branches.join('\n') && sessions === shownSessions) return
     branches = local
     await publish(to)
   }
 
-  /** Shows the issue in the popup (opening it) and selects it on the board. */
+  /** Shows the issue in the detail view and selects it on the board, for when the view closes. */
   const showIssue = async (to: Host, number: number) => {
     const ticket = ++detailTicket
-    const known = snapshot === null ? [] : [...snapshot.open, ...snapshot.done]
-    const title = known.find(one => one.number === number)?.title ?? null
     await to.setDetail({ number, issue: null, isLoading: true, error: null })
     await to.pick(number)
-    await to.openPopup(popupTitle(number, title))
     try {
       repo ??= await resolveRepo(to, cwd)
       const raw = await fetchIssue(to, cwd, repo, number)
@@ -216,10 +276,15 @@ export const register: Register = on => {
       const issue = { ...detailOf(raw), ...(override === undefined ? {} : { priority: override.priority }) }
       if (ticket !== detailTicket) return
       await to.setDetail({ number, issue, isLoading: false, error: null })
-      await to.openPopup(popupTitle(number, issue.title))
     } catch (error) {
       if (ticket === detailTicket) await to.setDetail({ number, issue: null, isLoading: false, error: messageOf(error) })
     }
+  }
+
+  /** Back to the columns: a load still on its way is dropped. */
+  const closeDetail = (to: Host) => {
+    detailTicket += 1
+    void to.setDetail(null)
   }
 
   /** The issue's Priority as the board shows it: a write not yet read back, else GitHub's. */
@@ -232,7 +297,7 @@ export const register: Register = on => {
     return null
   }
 
-  /** Shows `priority` on the card and in the popup at once, before GitHub has it. */
+  /** Shows `priority` on the card and in the detail view at once, before GitHub has it. */
   const showPriority = async (to: Host, number: number, priority: Priority | null) => {
     await publish(to)
     await to.updateDetail(shown =>
@@ -306,11 +371,72 @@ export const register: Register = on => {
     }
   }
 
+  /** Opens a new tab in the repository root that runs `command`: in Orca inside Orca, in iTerm elsewhere. */
+  const openTab = async (to: Host, root: string, name: string, command: string): Promise<Tab> => {
+    const inOrca = termProgram === 'Orca'
+    const run = await to.run(inOrca ? orcaArgv(root, name, command) : itermArgv(root, command), {
+      cwd: root,
+      timeoutMs: 30_000,
+    })
+    if (run.exitCode !== 0) {
+      throw new Error(run.stderr.trim().split('\n')[0] || `${inOrca ? 'orca' : 'osascript'} exited with ${run.exitCode}`)
+    }
+    const id = inOrca ? orcaHandleOf(run.stdout) : itermIdOf(run.stdout)
+    return {
+      app: inOrca ? 'Orca' : 'iTerm',
+      terminal: id === null ? null : { app: inOrca ? 'orca' : 'iterm', id },
+    }
+  }
+
+  /** A new session with the prompt its labels call for; the board records it. */
+  const startSession = async (to: Host, at: string, number: number, title: string, prompt: string) => {
+    const root = await repoRoot(to, cwd)
+    const sessionId = crypto.randomUUID()
+    const name = sessionName(number, title)
+    const tab = await openTab(to, root, name, claudeCommand(sessionId, name, prompt))
+    const record = { sessionId, terminal: tab.terminal, startedAt: await to.now() }
+    let dropped: string[] = []
+    await saveRecords(to, at, kept => {
+      const added = withRecord(kept, number, record)
+      dropped = added.dropped
+      return added.records
+    })
+    // A record that fell off the end takes its report along.
+    for (const id of dropped) await to.deleteStore(reportKey(id)).catch(() => undefined)
+    await publish(to)
+    to.toast(`Started #${number} in a new ${tab.app} tab: ${prompt}`)
+  }
+
+  /** The issue's last session, in a new tab with `claude --resume`; it reports under its record again. */
+  const resumeSession = async (to: Host, at: string, number: number, title: string) => {
+    const session = issueSession(number, await to.now())
+    if (session === null) throw new Error('the board started no session for it')
+    const root = await repoRoot(to, cwd)
+    const recordId = session.last.sessionId
+    const tab = await openTab(to, root, sessionName(number, title), resumeCommand(recordId, session.resumeId))
+    const now = await to.now()
+    await saveRecords(to, at, kept => withReopened(kept, number, recordId, tab.terminal, now))
+    await publish(to)
+    to.toast(`Resumed #${number} in a new ${tab.app} tab`)
+  }
+
+  /** Brings the tab of the issue's running session forward. */
+  const focusSession = async (to: Host, number: number) => {
+    const terminal = issueSession(number, await to.now())?.live?.terminal ?? null
+    if (terminal === null) throw new Error('the board does not know its tab')
+    const run = await to.run(focusArgv(terminal), { cwd, timeoutMs: 30_000 })
+    if (run.exitCode !== 0) {
+      throw new Error(run.stderr.trim().split('\n')[0] || `${terminal.app === 'orca' ? 'orca' : 'osascript'} exited with ${run.exitCode}`)
+    }
+    if (terminal.app === 'iterm' && run.stdout.trim() === ITERM_MISSING) throw new Error('its iTerm tab is closed')
+  }
+
   /**
-   * `s` (spec section 7): a new interactive Claude session for the card in
-   * the repository root, in a new Orca tab inside Orca and a new iTerm tab
-   * elsewhere, with the prompt its labels call for. The board writes nothing
-   * to GitHub; it records the session.
+   * `s` (spec section 7): a running session's tab comes forward; In progress
+   * and Review resume the last session; the label columns start a new one with
+   * the prompt their labels call for, in the repository root, in a new Orca tab
+   * inside Orca and a new iTerm tab elsewhere. The board writes nothing to
+   * GitHub; it records the sessions it starts.
    */
   const startCard = async (to: Host, number: number) => {
     const card = lastBoard?.cards.find(one => one.number === number)
@@ -318,8 +444,8 @@ export const register: Register = on => {
       to.toast(`#${number} is not a card on the board`)
       return
     }
-    const launch = launchIn(snapshot, number, card.column, config)
-    if ('reason' in launch) {
+    const launch = launchIn(snapshot, number, card.column, config, card.session)
+    if (launch.kind === 'none') {
       to.toast(launch.reason)
       return
     }
@@ -327,35 +453,21 @@ export const register: Register = on => {
     starting.add(number)
     const at = repo
     try {
-      const root = await repoRoot(to, cwd)
-      const sessionId = crypto.randomUUID()
-      const name = sessionName(number, card.title)
-      const command = claudeCommand(sessionId, name, launch.prompt)
-      const inOrca = termProgram === 'Orca'
-      const run = await to.run(inOrca ? orcaArgv(root, name, command) : itermArgv(root, command), {
-        cwd: root,
-        timeoutMs: 30_000,
-      })
-      if (run.exitCode !== 0) {
-        throw new Error(run.stderr.trim().split('\n')[0] || `${inOrca ? 'orca' : 'osascript'} exited with ${run.exitCode}`)
-      }
-      const record: SessionRecord = {
-        sessionId,
-        terminal: inOrca ? orcaHandleOf(run.stdout) : null,
-        startedAt: await to.now(),
-      }
-      // Read again: another board may have started a card since.
-      const kept = await loadRecords(to, at)
-      kept[String(number)] = [...(kept[String(number)] ?? []), record].slice(-RECORDS_PER_ISSUE)
-      await to.writeStore(`sessions:${at}`, kept)
-      records = kept
-      await publish(to)
-      to.toast(`Started #${number} in a new ${inOrca ? 'Orca' : 'iTerm'} tab: ${launch.prompt}`)
+      if (launch.kind === 'focus') await focusSession(to, number)
+      if (launch.kind === 'resume') await resumeSession(to, at, number, card.title)
+      if (launch.kind === 'start') await startSession(to, at, number, card.title, launch.prompt)
     } catch (error) {
-      to.toast(`Could not start #${number}: ${messageOf(error)}`)
+      to.toast(`Could not ${launch.kind} #${number}: ${messageOf(error)}`)
     } finally {
       starting.delete(number)
     }
+  }
+
+  /** Records this session's state for the board, when the board started it and the state changed. */
+  const report = (state: Report['state']) => {
+    if (reporter === null || reporter.state === state) return
+    reporter.state = state
+    void reporter.write()
   }
 
   const openInBrowser = (to: Host, number: number) => {
@@ -376,6 +488,8 @@ export const register: Register = on => {
   const stop = () => {
     for (const timer of timers) timer.cancel()
     timers = []
+    // The board opens again on its columns.
+    if (host !== null) closeDetail(host)
   }
 
   on('session.start', async ($, e, next) => {
@@ -393,8 +507,8 @@ export const register: Register = on => {
       updateDetail: fn => update($, detail, fn),
       readStore: key => $.store.get(key),
       writeStore: (key, value) => $.store.set(key, value),
+      deleteStore: key => $.store.delete(key),
       pick: number => update($, pick, old => ({ number, seq: (old?.seq ?? 0) + 1 })),
-      openPopup: title => $.ui.open({ id: POPUP, title, focus: true, closeOnEscape: true }),
       toast: text => $.ui.toast(text),
     }
     await $.command.register({
@@ -404,17 +518,91 @@ export const register: Register = on => {
     // A reload keeps the pane open and drops the timers: start them again.
     if ((await $.ui.panes()).some(pane => pane.id === PANE)) start()
 
+    // The reporter (spec section 8): a session the board started finds its record id in the
+    // environment, and writes its state under it until it ends.
+    reporter = null
+    const recordId = e.isInteractive ? await $.env.get('KANBAN_BOARD_SESSION').catch(() => undefined) : undefined
+    if (recordId !== undefined && recordId !== '') {
+      const key = reportKey(recordId)
+      const previous = reportOf(await $.store.get(key).catch(() => undefined))
+      const now = await $.clock.now()
+      // A reload runs this again mid-turn: keep what the session said last.
+      const isFresh = previous !== null && previous.state !== 'ended' && now - previous.at < STALE_MS
+      let writes = Promise.resolve()
+      const write = () => {
+        // One write after another, each with the state at its turn: the last one written is the newest.
+        writes = writes
+          .then(async () => {
+            const value: Report = { state: mine.state, at: await $.clock.now(), sessionId: await $.session.id() }
+            await $.store.set(key, value)
+          })
+          .catch(() => undefined)
+        return writes
+      }
+      const mine: Reporter = {
+        state: isFresh ? previous.state : 'waiting',
+        isInTurn: isFresh && previous.state === 'working',
+        write,
+        timer: $.clock.every(HEARTBEAT_MS, () => void write()),
+      }
+      reporter = mine
+      void write()
+    }
+
+    return next(e)
+  })
+
+  on('turn.start', ($, e, next) => {
+    if (reporter !== null && e.agentId === undefined) {
+      reporter.isInTurn = true
+      report('working')
+    }
+    return next(e)
+  })
+
+  on('turn.complete', ($, e, next) => {
+    if (reporter !== null && e.agentId === undefined) {
+      reporter.isInTurn = false
+      report('waiting')
+    }
+    return next(e)
+  })
+
+  // A permission prompt waits for the person; the tool's end means they answered.
+  on('classic.PermissionRequest', ($, e, next) => {
+    report('waiting')
+    return next(e)
+  })
+    // A report is never worth a tool call: a failure leaves the call to the hooks beneath.
+    .catch(() => undefined)
+
+  on('classic.PostToolUse', ($, e, next) => {
+    if (reporter?.isInTurn === true) report('working')
+    return next(e)
+  })
+    .catch(() => undefined)
+
+  on('session.end', async ($, e, next) => {
+    const mine = reporter
+    // After a `/clear` the process goes on under a new id, the same tab, the same issue.
+    if (mine !== null && e.reason !== 'clear') {
+      mine.timer.cancel()
+      mine.state = 'ended'
+      await mine.write()
+    }
     return next(e)
   })
 
   on('command.run', { command: 'board' }, async $ => {
     const panes = await $.ui.panes()
     if (panes.some(pane => pane.id === PANE)) {
-      if (panes.some(pane => pane.id === POPUP)) await $.ui.close({ id: POPUP })
       await $.ui.close({ id: PANE })
       stop()
       return { text: 'Board closed.' }
     }
+    // A board opened again draws its `Client` again, past a failure that is gone.
+    fault = null
+    $.ui.invalidate('ui.render')
     const opened = await $.ui.open({ id: PANE, title: 'Board', focus: true })
     start()
 
@@ -433,7 +621,8 @@ export const register: Register = on => {
     if (message.type === 'refresh') void refresh(to)
     if (message.type === 'open') openInBrowser(to, message.number)
     if (message.type === 'detail') void showIssue(to, message.number)
-    if (message.type === 'priority') void changePriority(to, message.number, message.action, null)
+    if (message.type === 'back') closeDetail(to)
+    if (message.type === 'priority') void changePriority(to, message.number, message.action, message.current)
     if (message.type === 'start') void startCard(to, message.number)
     return next(e)
   })
@@ -460,48 +649,11 @@ export const register: Register = on => {
       board: await read($, board),
       status: await read($, status),
       pick: await read($, pick),
-      isFocused: e.props.isFocused,
+      detail: await read($, detail),
       columns,
       rows,
     }
 
     return <Client key="board" module="./board.tsx" props={props} width={columns} height={rows} />
-  })
-
-  on('ui.render', { component: 'Pane', requestId: POPUP }, async ($, e) => {
-    const elements = $.ui.resolve(e)
-    const shown = await read($, detail)
-    if (shown === null) {
-      const { Text } = elements
-      return <Text dimColor>No issue chosen.</Text>
-    }
-    const current = await read($, board)
-    const card = current?.cards.find(one => one.number === shown.number)
-    const column = COLUMNS.find(one => one.id === card?.column)?.title ?? null
-    const where = {
-      columns: e.props.bodyColumns,
-      column,
-      priorityOff: current?.priorityOff ?? priorityOff(),
-      startOff: card === undefined ? 'only a card on the board starts' : card.noStart,
-    }
-
-    return drawPopup(elements, shown, where, {
-      select: number => {
-        const to = host
-        if (to !== null) void showIssue(to, number)
-      },
-      open: number => {
-        const to = host
-        if (to !== null) openInBrowser(to, number)
-      },
-      start: number => {
-        const to = host
-        if (to !== null) void startCard(to, number)
-      },
-      priority: (number, action) => {
-        const to = host
-        if (to !== null) void changePriority(to, number, action, shown.issue?.priority ?? null)
-      },
-    })
   })
 }

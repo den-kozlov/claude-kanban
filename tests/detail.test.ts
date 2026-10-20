@@ -17,7 +17,7 @@ const raw = (extra: Partial<RawIssueDetail> = {}): RawIssueDetail => ({
 })
 
 describe('detail', () => {
-  test('the popup gets one-line titles, open blockers first and the Priority', async () => {
+  test('the detail view gets one-line titles, open blockers first and the Priority', async () => {
     const detail = detailOf(
       raw({
         blockedBy: {

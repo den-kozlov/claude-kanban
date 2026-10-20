@@ -14,6 +14,16 @@ export type CiState = 'success' | 'failure' | 'pending'
 
 export type PrBadge = { number: number; isDraft: boolean; ci: CiState | null }
 
+/**
+ * Where a session the board started stands (spec section 8): starting until
+ * it first reports, working through a turn, waiting for the person (the turn
+ * ended, a permission prompt), ended (closed, or silent for 30 s).
+ */
+export type SessionState = 'starting' | 'working' | 'waiting' | 'ended'
+
+/** What `s` does for a card: start a new session, focus the running one's tab, or resume the last one. */
+export type StartAction = 'start' | 'focus' | 'resume'
+
 export type Card = {
   number: number
   title: string
@@ -25,9 +35,11 @@ export type Card = {
   parent: number | null
   pr: PrBadge | null
   isSandcastle: boolean
-  /** The board has started a session for it (spec section 7); the card stays in its column. */
-  isStarted: boolean
-  /** Why `s` does not start it (its column, no launch rule); null when it starts. */
+  /** The state of its session that needs the person first; null when the board started none. */
+  session: SessionState | null
+  /** What `s` does; null when it does nothing, and `noStart` says why. */
+  startAs: StartAction | null
+  /** Why `s` does nothing (its column, no launch rule); null when it does something. */
   noStart: string | null
 }
 
@@ -50,8 +62,8 @@ export type BoardStatus = {
 }
 
 /**
- * A card the board should select, asked from outside the board (a link in the
- * detail popup). `seq` grows with each ask, so the board takes each one once.
+ * A card the board should select, asked by the hooks module (the issue the
+ * detail view showed last). `seq` grows with each ask, so the board takes each one once.
  */
 export type SelectRequest = { number: number; seq: number }
 
@@ -60,7 +72,8 @@ export type BoardProps = {
   board: Board | null
   status: BoardStatus
   pick: SelectRequest | null
-  isFocused: boolean
+  /** The issue the detail view shows; null while the board shows its columns. */
+  detail: Detail | null
   columns: number
   rows: number
 }
@@ -69,19 +82,23 @@ export type BoardProps = {
 export type BoardMessage =
   | { type: 'refresh' }
   | { type: 'open'; number: number }
+  /** Shows the issue in the detail view (Enter, a link). */
   | { type: 'detail'; number: number }
-  | { type: 'priority'; number: number; action: PriorityAction }
+  /** Closes the detail view (Backspace). */
+  | { type: 'back' }
+  /** `current`: the Priority the board shows for it, for an issue the board does not hold. */
+  | { type: 'priority'; number: number; action: PriorityAction; current: Priority | null }
   | { type: 'start'; number: number }
 
 /** `p` moves to the next Priority (none → Urgent → … → Low → none), `P` clears it. */
 export type PriorityAction = 'cycle' | 'clear'
 
-/** A blocker or the parent of an issue, as the detail popup links it. */
+/** A blocker or the parent of an issue, as the detail view links it. */
 export type IssueLink = { number: number; title: string; isOpen: boolean }
 
 export type IssueComment = { author: string; createdAt: string; body: string }
 
-/** What the detail popup shows of one issue (spec section 5). */
+/** What the detail view shows of one issue (spec section 5). */
 export type IssueDetail = {
   number: number
   title: string
@@ -92,14 +109,14 @@ export type IssueDetail = {
   priority: Priority | null
   blockers: IssueLink[]
   parent: IssueLink | null
-  /** Markdown, cut to a size the pane draws whole. */
+  /** Markdown, cut to a size the board's props carry beside the board. */
   body: string
   /** The last three, oldest first. */
   comments: IssueComment[]
   commentCount: number
 }
 
-/** The detail popup's issue: the one asked for, and where its load stands. */
+/** The detail view's issue: the one asked for, and where its load stands. */
 export type Detail = {
   number: number
   issue: IssueDetail | null
@@ -109,6 +126,12 @@ export type Detail = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'kanban-board': { board: Board | null; status: BoardStatus; pick: SelectRequest | null; detail: Detail | null }
+    'kanban-board': {
+      /** Kept under a shape tag: a reload whose `Card` or `Board` changed reads the old one as absent. */
+      board: Shaped<Board | null>
+      status: BoardStatus
+      pick: SelectRequest | null
+      detail: Detail | null
+    }
   }
 }

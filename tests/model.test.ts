@@ -77,6 +77,23 @@ describe('column rules', () => {
 
     expect(board.cards[0]).toMatchObject({ column: 'inProgress', isSandcastle: true })
   })
+
+  test('a running session of the board puts the issue in In progress; an ended one leaves it', async () => {
+    const sessions = new Map([
+      [1, 'working'],
+      [2, 'ended'],
+    ] as const)
+    const board = buildBoard(
+      snapshot({ open: [issue(1, { labelNames: ['ready-for-human'] }), issue(2, { labelNames: ['ready-for-human'] })] }),
+      [],
+      DEFAULT_CONFIG,
+      0,
+      { sessions },
+    )
+
+    expect(board.cards.find(card => card.number === 1)).toMatchObject({ column: 'inProgress', session: 'working', startAs: 'focus' })
+    expect(board.cards.find(card => card.number === 2)).toMatchObject({ column: 'readyForHuman', session: 'ended', startAs: 'start' })
+  })
 })
 
 describe('containers', () => {

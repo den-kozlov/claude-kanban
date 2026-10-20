@@ -2,7 +2,7 @@
 // board's cards: the column rules (spec section 2) and the order (section 3).
 // Pure: no `$`, so the tests run it directly.
 
-import type { Board, Card, CiState, ColumnId, Container, PrBadge, Priority } from '../../types'
+import type { Board, Card, CiState, ColumnId, Container, PrBadge, Priority, SessionState } from '../../types'
 import { launchOf, type Launch, type LaunchRule } from './launch'
 import { oneLine } from './text'
 
@@ -208,7 +208,10 @@ export function branchesByIssue(branches: string[], config: Config): Map<number,
 const isContainer = (issue: RawIssue, config: Config) =>
   labelsOf(issue).some(label => config.containers.includes(label))
 
-/** The first column whose rule matches: Review, In progress, Blocked, the label columns. */
+/**
+ * The first column whose rule matches: Review, In progress (a branch, or a
+ * session of the board that runs), Blocked, the label columns.
+ */
 function columnOf(
   issue: RawIssue,
   config: Config,
@@ -231,9 +234,12 @@ export type BoardExtras = {
   overrides?: PriorityOverrides
   /** Why `p`/`P` do nothing; null (the default) while they work. */
   priorityOff?: string | null
-  /** The issues with a session the board started (spec section 8). */
-  started?: ReadonlySet<number>
+  /** The state of each issue's sessions the board started (spec section 8). */
+  sessions?: ReadonlyMap<number, SessionState>
 }
+
+/** A session that runs: it puts its card in In progress. */
+const isLive = (state: SessionState | null) => state !== null && state !== 'ended'
 
 function cardOf(
   issue: RawIssue,
@@ -244,7 +250,8 @@ function cardOf(
 ): Omit<Card, 'pr' | 'isSandcastle'> {
   const hidden = new Set([...config.containers, ...Object.values(config.columns).flat()])
   const { overrides } = extras
-  const launch = launchOf(issue.number, column, labelsOf(issue), parentLabels, config)
+  const session = extras.sessions.get(issue.number) ?? null
+  const launch = launchOf(issue.number, column, labelsOf(issue), parentLabels, config, session)
   return {
     number: issue.number,
     title: oneLine(issue.title).slice(0, TITLE_LIMIT),
@@ -255,8 +262,9 @@ function cardOf(
     comments: issue.comments.totalCount,
     priority: overrides.has(issue.number) ? (overrides.get(issue.number) ?? null) : priorityOf(issue),
     parent: issue.parent?.number ?? null,
-    isStarted: extras.started.has(issue.number),
-    noStart: 'reason' in launch ? launch.reason : null,
+    session,
+    startAs: launch.kind === 'none' ? null : launch.kind,
+    noStart: launch.kind === 'none' ? launch.reason : null,
   }
 }
 
@@ -266,11 +274,17 @@ function parentLabelsIn(snapshot: Snapshot): (issue: RawIssue) => string[] {
   return issue => (issue.parent === null ? [] : (openLabels.get(issue.parent.number) ?? []))
 }
 
-/** What `s` does for the card of `number` standing in `column`: its prompt, or why it does not start. */
-export function launchIn(snapshot: Snapshot, number: number, column: ColumnId, config: Config): Launch {
+/** What `s` does for the card of `number` standing in `column`, its sessions in `session`. */
+export function launchIn(
+  snapshot: Snapshot,
+  number: number,
+  column: ColumnId,
+  config: Config,
+  session: SessionState | null,
+): Launch {
   const issue = snapshot.open.find(one => one.number === number) ?? snapshot.done.find(one => one.number === number)
-  if (issue === undefined) return { reason: `#${number} is not on the board` }
-  return launchOf(number, column, labelsOf(issue), parentLabelsIn(snapshot)(issue), config)
+  if (issue === undefined) return { kind: 'none', reason: `#${number} is not on the board` }
+  return launchOf(number, column, labelsOf(issue), parentLabelsIn(snapshot)(issue), config, session)
 }
 
 export function buildBoard(
@@ -283,7 +297,7 @@ export function buildBoard(
   const all: Required<BoardExtras> = {
     overrides: extras.overrides ?? new Map(),
     priorityOff: extras.priorityOff ?? null,
-    started: extras.started ?? new Set(),
+    sessions: extras.sessions ?? new Map(),
   }
   const parentLabelsOf = parentLabelsIn(snapshot)
   const prs = prsByIssue(snapshot.prs, config)
@@ -306,7 +320,7 @@ export function buildBoard(
       prs.get(issue.number) ??
       (linked === undefined ? null : { number: linked.number, isDraft: linked.isDraft, ci: null })
     const branch = inProgress.get(issue.number)
-    const column = columnOf(issue, config, pr, branch !== undefined)
+    const column = columnOf(issue, config, pr, branch !== undefined || isLive(all.sessions.get(issue.number) ?? null))
     cards.push({
       ...cardOf(issue, column, config, all, parentLabelsOf(issue)),
       pr,

@@ -20,7 +20,7 @@ const ISSUE_FIELDS = `
   parent{number}
   ${FIELD_VALUES}`
 
-// Section 9 of the spec; the body and the comments wait for the popup.
+// Section 9 of the spec; the body and the comments wait for the detail view.
 const OPEN_ISSUES = `query($owner:String!,$name:String!,$endCursor:String){
   repository(owner:$owner,name:$name){
     issues(first:50, after:$endCursor, states:OPEN, orderBy:{field:CREATED_AT,direction:DESC}){
@@ -50,7 +50,7 @@ const DONE_ISSUES = `query($q:String!,$endCursor:String){
   }
 }`
 
-// The detail popup's issue (spec section 5), in any state.
+// The detail view's issue (spec section 5), in any state.
 const ISSUE_DETAIL = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     issue(number:$number){
@@ -221,7 +221,7 @@ export async function readBranches(shell: Shell, cwd: string): Promise<string[]>
   return [...names].sort()
 }
 
-/** One issue with its body and its last comments, for the detail popup. */
+/** One issue with its body and its last comments, for the detail view. */
 export async function fetchIssue(shell: Shell, cwd: string, repo: string, number: number): Promise<RawIssueDetail> {
   const [owner = '', name = ''] = repo.split('/')
   const data = (await graphql(shell, cwd, ISSUE_DETAIL, { owner, name, number })) as {

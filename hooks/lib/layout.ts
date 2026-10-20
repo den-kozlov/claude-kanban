@@ -3,7 +3,7 @@
 // each column scrolls to (spec sections 2 and 3). Pure, so the board's
 // surface module draws from it and the tests check it without a surface.
 
-import type { Card, ColumnId } from '../../types'
+import type { Card, ColumnId, SessionState } from '../../types'
 import type { ViewColumn } from './model'
 import { cellWidth, oneLine, truncate, wrap } from './text'
 
@@ -18,7 +18,7 @@ export const HEADER_ROWS = 2
 export const GUTTER = 2
 const TITLE_LINES = 2
 
-export type Tone = 'plain' | 'dim' | 'success' | 'failure' | 'pending'
+export type Tone = 'plain' | 'dim' | 'success' | 'failure' | 'pending' | 'accent'
 
 export type Segment = { text: string; tone: Tone }
 
@@ -27,6 +27,17 @@ export type CardLines = { title: string[]; meta: Segment[] }
 const CI_MARK = { success: '✓', failure: '✗', pending: '•' } as const
 
 const PRIORITY_TONE = { Urgent: 'failure', High: 'pending', Medium: 'plain', Low: 'dim' } as const
+
+/** How a card and the detail view name a session's state (spec section 8). */
+export const SESSION_LABEL: Record<SessionState, string> = {
+  starting: 'starting',
+  working: 'working',
+  waiting: 'waiting for input',
+  ended: 'ended',
+}
+
+// A session that waits for the person stands out the most.
+const SESSION_TONE = { starting: 'pending', working: 'pending', waiting: 'failure', ended: 'dim' } as const
 
 /** The lines of a full card `width` cells wide (gutter excluded). */
 export function fullCard(card: Card, width: number): CardLines {
@@ -41,7 +52,7 @@ export function fullCard(card: Card, width: number): CardLines {
     })
   }
   if (card.isSandcastle) parts.push({ text: 'sandcastle', tone: 'pending' })
-  if (card.isStarted) parts.push({ text: 'started', tone: 'pending' })
+  if (card.session !== null) parts.push({ text: SESSION_LABEL[card.session], tone: SESSION_TONE[card.session] })
   for (const label of card.labels) parts.push({ text: label, tone: 'dim' })
   if (card.comments > 0) {
     parts.push({ text: `${card.comments} comment${card.comments === 1 ? '' : 's'}`, tone: 'dim' })

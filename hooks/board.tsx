@@ -1,12 +1,15 @@
 // The board's surface module: drawn in the pane's `Client`, on the drawing
 // thread, with no `$`. It owns what is the viewer's alone (the selection,
-// Done shown or hidden, the container filter, each column's window) and
-// posts what needs the hooks module (refresh, open in the browser, the
-// detail popup).
+// Done shown or hidden, the container filter, each column's window, where the
+// detail view is scrolled to) and posts what needs the hooks module (refresh,
+// open in the browser, the issue the detail view shows). The detail view is
+// drawn here, not in a pane of its own: only a click gives a `Client` the keys,
+// so a second pane would take them from the board for good.
 
 import type { ClientKeyEvent, ClientModule, ClientSurface } from 'claude-code'
 
 import type { BoardMessage, BoardProps, Card } from '../types'
+import { clampScroll, detailLines, placeOf, scrollTo, START_LABEL, walk, type DetailLine } from './lib/detail-view'
 import {
   GUTTER,
   hitTest,
@@ -35,9 +38,24 @@ type BoardState = {
   scroll: Record<string, number>
   /** The `seq` of the last `pick` from the hooks module the board has taken. */
   pickSeen: number | null
+  /** The issue `detailScroll` and `detailLink` are for: another issue starts at the top. */
+  detailFor: number | null
+  detailScroll: number
+  /** Which of the detail view's links Enter follows, by order. */
+  detailLink: number
 }
 
-const INITIAL: BoardState = { selected: null, showDone: false, filter: null, picker: null, scroll: {}, pickSeen: null }
+const INITIAL: BoardState = {
+  selected: null,
+  showDone: false,
+  filter: null,
+  picker: null,
+  scroll: {},
+  pickSeen: null,
+  detailFor: null,
+  detailScroll: 0,
+  detailLink: 0,
+}
 
 const COLOR: Record<Tone, string | undefined> = {
   plain: undefined,
@@ -45,6 +63,7 @@ const COLOR: Record<Tone, string | undefined> = {
   success: 'success',
   failure: 'error',
   pending: 'warning',
+  accent: 'claude',
 }
 
 const ARROWS = new Set(['up', 'down', 'left', 'right'])
@@ -66,6 +85,21 @@ function compute(props: BoardProps, state: BoardState, size: { columns: number; 
   const isShown = picked !== null && order.some(column => column.includes(picked))
   const selected = resolveSelection(order, isShown ? picked : state.selected)
   return { filter, selected, layout: layoutBoard(view, size, selected, state.scroll) }
+}
+
+/** The detail view as drawn: its lines, the window on them, the link Enter follows. */
+function detailOf(props: BoardProps, state: BoardState, size: { columns: number; rows: number }) {
+  // Absent in the props of a hooks module older than this surface module: a reload swaps the two apart.
+  const detail = props.detail ?? null
+  if (detail === null) return null
+  const lines = detailLines(detail, placeOf(props.board, detail.number), size.columns)
+  const rows = Math.max(1, size.rows - TOP_ROWS)
+  const isSame = state.detailFor === detail.number
+  const links = lines.flatMap((line, index) => (line.link === null ? [] : [index]))
+  const link = links.length === 0 ? null : Math.min(isSame ? state.detailLink : 0, links.length - 1)
+  const scroll = clampScroll(isSame ? state.detailScroll : 0, lines.length, rows)
+  const priority = detail.issue !== null && detail.issue.number === detail.number ? detail.issue.priority : null
+  return { number: detail.number, priority, lines, rows, links, link, scroll }
 }
 
 /** The picker's rows: every task, then each container. */
@@ -113,7 +147,90 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
     surface.setState({ ...next, scroll: relaid === null ? state.scroll : scrollOf(relaid.layout) })
   }
 
+  const detail = detailOf(props, state, size)
+
+  /** The detail view's keys (spec section 5): Backspace goes back, the rest scroll, follow a link or act on the issue. */
+  const detailKey = (view: NonNullable<typeof detail>, event: ClientKeyEvent) => {
+    // From `stored`: the pick of the issue shown last waits for the board, to select it on the way back.
+    const at = (scroll: number, link = view.link ?? 0) =>
+      surface.setState({
+        ...stored,
+        detailFor: view.number,
+        detailScroll: clampScroll(scroll, view.lines.length, view.rows),
+        detailLink: link,
+      })
+    const toLink = (step: number) => {
+      if (view.link === null) return
+      const link = (view.link + step + view.links.length) % view.links.length
+      at(scrollTo(view.scroll, view.links[link] ?? 0, view.rows), link)
+    }
+    switch (event.key) {
+      case 'backspace':
+      case 'delete':
+        post({ type: 'back' })
+        return
+      case 'up':
+      case 'down': {
+        const step = event.key === 'up' ? -1 : 1
+        const next = walk({ ...view, lineCount: view.lines.length }, step)
+        if (next.link !== null) at(next.scroll, next.link)
+        else at(next.scroll)
+        return
+      }
+      case 'pageup':
+        at(view.scroll - view.rows)
+        return
+      case 'pagedown':
+      case 'space':
+      case ' ':
+        at(view.scroll + view.rows)
+        return
+      case 'home':
+        at(0)
+        return
+      case 'end':
+        at(view.lines.length)
+        return
+      case 'left':
+        toLink(-1)
+        return
+      case 'right':
+        toLink(1)
+        return
+      case 'tab':
+        toLink(event.shift === true ? -1 : 1)
+        return
+      case 'return': {
+        // Only a link on screen: one scrolled away is not what the person looks at.
+        const index = view.link === null ? -1 : (view.links[view.link] ?? -1)
+        const isOnScreen = index >= view.scroll && index < view.scroll + view.rows
+        const number = isOnScreen ? view.lines[index]?.link : null
+        if (number != null) post({ type: 'detail', number })
+        return
+      }
+      case 'o':
+        post({ type: 'open', number: view.number })
+        return
+      case 's':
+        post({ type: 'start', number: view.number })
+        return
+      case 'p':
+      case 'P': {
+        const action = event.key === 'P' || event.shift === true ? 'clear' : 'cycle'
+        post({ type: 'priority', number: view.number, action, current: view.priority })
+        return
+      }
+      case 'r':
+        post({ type: 'refresh' })
+        return
+    }
+  }
+
   surface.onKey((event: ClientKeyEvent) => {
+    if (detail !== null) {
+      detailKey(detail, event)
+      return
+    }
     if (state.picker !== null) {
       const rows = pickerRows(props)
       if (event.key === 'up') surface.setState({ ...state, picker: Math.max(0, state.picker - 1) })
@@ -151,8 +268,10 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       case 'P':
         // The hooks module writes it, or says in a toast why it cannot.
         if (computed.selected !== null) {
+          const number = computed.selected
           const action = event.key === 'P' || event.shift === true ? 'clear' : 'cycle'
-          post({ type: 'priority', number: computed.selected, action })
+          const current = props.board?.cards.find(card => card.number === number)?.priority ?? null
+          post({ type: 'priority', number, action, current })
         }
         return
       case 'r':
@@ -171,6 +290,12 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
 
   surface.onPointer(event => {
     if (event.type !== 'down' || event.button !== 'left') return
+    if (detail !== null) {
+      // A press on a link shows that issue.
+      const number = detail.lines[detail.scroll + event.y - TOP_ROWS]?.link
+      if (event.y >= TOP_ROWS && number != null) post({ type: 'detail', number })
+      return
+    }
     if (state.picker !== null) {
       const picker = pickerWindow(props, state, size.rows)
       const row = picker.shown[event.y - TOP_ROWS - 1]
@@ -190,15 +315,19 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       const container = board?.containers.find(one => one.number === computed.filter)
       parts.push({ text: `  filter #${computed.filter} ${container?.title ?? ''}`, tone: 'pending' })
     }
-    if (state.showDone) parts.push({ text: '  +done', tone: 'dim' })
+    if (detail !== null) {
+      const last = Math.min(detail.lines.length, detail.scroll + detail.rows)
+      parts.push({ text: `  #${detail.number}  ${detail.scroll + 1}–${last} of ${detail.lines.length}`, tone: 'dim' })
+    } else if (state.showDone) parts.push({ text: '  +done', tone: 'dim' })
     if (props.status.error !== null) parts.push({ text: `  ⚠ ${props.status.error}`, tone: 'failure' })
     else if (props.status.isLoading) parts.push({ text: '  refreshing…', tone: 'dim' })
     else if (board != null) parts.push({ text: `  updated ${clockOf(board.updatedAt)}`, tone: 'dim' })
 
     const priorityHint = board?.priorityOff === null ? '  p/P priority' : ''
-    const hints = props.isFocused
-      ? `←↑↓→ ⏎ details  s start  o open${priorityHint}  r refresh  d done  f filter`
-      : 'click the board for keys'
+    const startAs = detail === null ? null : placeOf(board ?? null, detail.number).startAs
+    const detailHints = `⌫ back  ↑↓ links, scroll  ⏎ show it${startAs === null ? '' : `  s ${START_LABEL[startAs]}`}  o open${priorityHint}`
+    // The board cannot tell whether a click gave it the keys (the pane's focus is another thing): it names them always.
+    const hints = detail !== null ? detailHints : `←↑↓→ ⏎ details  s start  o open${priorityHint}  r refresh  d done  f filter`
     const left = parts.reduce((sum, part) => sum + cellWidth(part.text), 0)
     const room = size.columns - left - 2
     return (
@@ -298,6 +427,33 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
     )
   }
 
+  const detailLineView = (line: DetailLine, isChosen: boolean) => (
+    <Box flexDirection="row" height={1}>
+      {line.parts.map((part, index) => (
+        <Text
+          bold={line.isBold}
+          color={COLOR[part.tone]}
+          dimColor={part.tone === 'dim'}
+          inverse={isChosen && index === 1}
+          wrap="truncate"
+        >
+          {part.text === '' ? ' ' : part.text}
+        </Text>
+      ))}
+    </Box>
+  )
+
+  const detailView = (view: NonNullable<typeof detail>) => {
+    const chosen = view.link === null ? -1 : (view.links[view.link] ?? -1)
+    return (
+      <Box flexDirection="column" height={view.rows} overflow="hidden">
+        {view.lines
+          .slice(view.scroll, view.scroll + view.rows)
+          .map((line, index) => detailLineView(line, view.scroll + index === chosen))}
+      </Box>
+    )
+  }
+
   const body = (layout: Layout, selected: number | null) => (
     <Box flexDirection="row" columnGap={1} height={size.rows - TOP_ROWS}>
       {layout.sections.map(one => sectionView(one, selected))}
@@ -307,17 +463,19 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
   return (
     <Box flexDirection="column" width={size.columns} height={size.rows} overflow="hidden">
       {statusBar()}
-      {state.picker !== null
-        ? pickerView()
-        : computed === null
-          ? (
-              <Text dimColor={props.status.error === null}>
-                {props.status.error === null
-                  ? 'Loading issues…'
-                  : `Could not load the board: ${props.status.error}. Press r to try again.`}
-              </Text>
-            )
-          : body(computed.layout, computed.selected)}
+      {detail !== null
+        ? detailView(detail)
+        : state.picker !== null
+          ? pickerView()
+          : computed === null
+            ? (
+                <Text dimColor={props.status.error === null}>
+                  {props.status.error === null
+                    ? 'Loading issues…'
+                    : `Could not load the board: ${props.status.error}. Press r to try again.`}
+                </Text>
+              )
+            : body(computed.layout, computed.selected)}
     </Box>
   )
 }

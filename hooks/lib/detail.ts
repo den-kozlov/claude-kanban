@@ -1,13 +1,16 @@
-// From GitHub's answer for one issue to what the detail popup shows (spec
+// From GitHub's answer for one issue to what the detail view shows (spec
 // section 5). Pure: no `$`, so the tests run it directly.
 
 import type { IssueComment, IssueDetail, IssueLink } from '../../types'
 import { priorityOf, type RawFieldValue } from './model'
 import { oneLine } from './text'
 
-/** A pane draws its first 100,000 characters: the body and three comments stay well under. */
-export const BODY_LIMIT = 20_000
-export const COMMENT_LIMIT = 4_000
+/**
+ * The board's props carry the issue beside the board, all under 100,000
+ * characters: the body and three comments take 16,000 at most.
+ */
+export const BODY_LIMIT = 10_000
+export const COMMENT_LIMIT = 2_000
 const TITLE_LIMIT = 200
 
 type RawLink = { number: number; title: string; state: string }
@@ -31,7 +34,7 @@ export type RawIssueDetail = {
 }
 
 /**
- * Markdown a pane draws: tab and newline its only control characters, cut to
+ * Markdown the detail view draws: tab and newline its only control characters, cut to
  * `limit` characters with a note, and a code fence the cut left open closed.
  */
 export function markdownOf(text: string, limit: number): string {

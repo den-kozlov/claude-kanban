@@ -24,17 +24,24 @@ Claude Code reads the mod from that folder: after an edit, run `/reload-plugins`
 | Key | Action |
 |---|---|
 | arrows / click | select a card |
-| `Enter` | open the detail popup of the card (`Esc` closes it) |
-| `s` | start the card in a new Claude session (a new Orca tab inside Orca, else an iTerm tab) |
+| `Enter` | show the card's details in the board (`Backspace` goes back to the columns) |
+| `s` | start the card in a new Claude session (a new Orca tab inside Orca, else an iTerm tab); on a card whose session runs, bring its tab forward; on In progress or Review, resume its last session |
 | `o` | open the issue in the browser |
 | `p` / `P` | next Priority (none → Urgent → High → Medium → Low → none) / clear it |
 | `r` | refresh now |
 | `d` | show / hide Done |
 | `f` | filter by a container (`prd`, `ideas`, `wayfinder:map`) |
 
-The detail popup shows the labels, Priority, assignees, parent and blockers (press one to show
-that issue and select it on the board), the description and the last three comments; `o` there
-opens the issue in the browser, `p` sets the next Priority.
+The detail view shows the labels, Priority, assignees, parent and blockers, the description and
+the last three comments. `↑`/`↓` go from link to link (the parent, then the blockers) and
+scroll the text past them; `Enter` (or a click on the link) shows that issue; back on the columns, it is the card
+selected. `s`, `o` and `p`/`P` act on the issue shown. `Esc` gives the keys back to the prompt,
+as everywhere in Claude Code: a click on the board takes them again.
+
+A session the board started reports its state to the board: the card shows `starting`,
+`working`, `waiting for input` or `ended`, and stands in In progress while the session runs.
+The new session reports through this mod, so the mod must load there too (the user-scope install
+does that).
 
 Priority is the organization's `Priority` issue field. The card moves with each press; the board
 writes the value 2 seconds after the last press. Where the repository's owner has no such

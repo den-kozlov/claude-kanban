@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Claude Code mod (a plugin of function hooks) named `kanban-board`: a kanban board of the current
 repository's GitHub issues in a pane beside the transcript, opened and closed with `/board`. The
 design is `docs/spec.md`; its section 12 is the delivery plan and a table of what is built.
-Stages 1 (read-only board), 2 (detail popup), 3 (Priority writes) and 4 (starting cards) are
-built; session tracking and the config file are not.
+Stages 1 (read-only board), 2 (detail view), 3 (Priority writes), 4 (starting cards) and 5
+(session tracking) are built; the config file is not.
 
 The repository root is the plugin folder. The plugin name cannot start with `claude-` (the
 validator reserves it), so the repo is `claude-kanban` and the plugin `kanban-board`; the
@@ -34,16 +34,20 @@ Two runtimes talk through messages:
 - `hooks/register.tsx`, the hooks module. It registers `/board`, opens and closes the `board` pane,
   and keeps the data fresh while the pane is open: GitHub every 60 s, local branches every 3 s.
   It writes the built board and the refresh status to `$.state`. Its `ui.render` hook for the pane
-  only hands that state as props to a `Client`. It also owns the detail popup, a second pane
-  (`issue`): it loads the issue into the `detail` state and draws it with `hooks/popup.tsx`, plain
-  elements the engine scrolls. A link there sets the `pick` state, which the board takes as its
-  selection once. It writes Priority (`p`/`P` from either pane): the new value shows at once as an
+  only hands that state as props to a `Client`. It loads the issue the detail view shows into the
+  `detail` state (null: the columns), and sets the `pick` state, which the board takes as its
+  selection once. It writes Priority (`p`/`P`): the new value shows at once as an
   override over GitHub's, kept until a refresh that started after the write ended. It starts cards
-  (`s`): a new `claude` in an Orca or iTerm tab, recorded in `$.store`.
+  (`s`): a new `claude` in an Orca or iTerm tab, recorded in `$.store`; it focuses a running
+  session's tab and resumes an ended one. The same module is the reporter in every session: one
+  whose environment has `KANBAN_BOARD_SESSION` (the board puts it in the tab's command) writes
+  its state to `$.store` under `live:<record id>`, and the board reads it with the branches.
 - `hooks/board.tsx`, the `Client`'s surface module. It runs on the drawing thread with no `$`. It owns
-  what belongs to the viewer: the selection, Done shown or hidden, the container filter and each
-  column's scroll window. It handles raw keys and pointer events, and posts `refresh` / `open` /
-  `detail` / `priority` / `start` to the hooks module (`ui.message`). Keys reach it only after the person clicks the board.
+  what belongs to the viewer: the selection, Done shown or hidden, the container filter, each
+  column's scroll window and where the detail view is scrolled to. It draws the detail view in
+  place of the columns while `detail` is set. It handles raw keys and pointer events, and posts
+  `refresh` / `open` / `detail` / `back` / `priority` / `start` to the hooks module (`ui.message`).
+  Keys reach it only after the person clicks the board.
 
 Pure logic, shared by both and covered by the tests:
 
@@ -54,9 +58,12 @@ Pure logic, shared by both and covered by the tests:
   these rows, so every text is cut by `hooks/lib/text.ts`, never wrapped by the terminal.
 - `hooks/lib/github.ts` — the `gh api graphql` queries and Priority mutations (own pagination,
   retry with backoff for the `EOF` failures) and the git reads.
-- `hooks/lib/detail.ts` — the popup's issue from GitHub's answer; Markdown cleaned and cut.
-- `hooks/lib/launch.ts` — which prompt a card starts with (or why it does not start), and the
-  `orca` / `osascript` commands with their shell quoting.
+- `hooks/lib/detail.ts` — the detail view's issue from GitHub's answer; Markdown cleaned and cut.
+- `hooks/lib/detail-view.ts` — the detail view's lines, cut to the cell, and its links.
+- `hooks/lib/launch.ts` — what `s` does for a card (start with which prompt, focus, resume, or
+  why nothing), and the `orca` / `osascript` commands with their shell quoting.
+- `hooks/lib/sessions.ts` — the session records and reports in `$.store`, and a session's state
+  from them (starting, working, waiting, ended).
 
 ## Platform rules that bite
 
@@ -65,11 +72,22 @@ Pure logic, shared by both and covered by the tests:
   `session.start` (the `Host` object in `register.tsx`; `Shell` in `github.ts`). The state helpers
   `read($, atom)` and `update($, atom, fn)` are the exception.
 - A render hook never writes state; write from handlers, timers or other events.
+- `$.state` outlives a reload, so the new code first reads what the old code wrote. The `board`
+  atom carries a shape tag (`BOARD_SHAPE` in `register.tsx`): change it with every change to
+  `Card` or `Board`, or the layout gets a card without the new fields and the pane shows
+  "The board failed" until `/board` opens it again.
+- A reload swaps the surface module and the hooks module apart: the new `board.tsx` may draw once
+  with the old module's props. Read a new `BoardProps` field as possibly absent (`?? null`).
 - Every `$.state` key must be declared in `types/index.d.ts`, which stays self-contained (no imports).
 - A `Client`'s props are plain JSON (no `undefined`, no optional fields) and at most 100,000
   characters, which is why titles are cut to 200 characters.
 - The engine's diff panel (`/diff` toggles it) takes the same dock as mod panes. While it shows,
   a mod pane is open with `isPlaced`/`isShown` true but never drawn: no `Pane` `ui.render` arrives.
   Hide the diff panel before you debug a pane that does not show.
+- `$.store` is one JSON file per plugin, read again on each get and locked for each set, so
+  concurrent sessions share it. Give each key one writer: the board writes `sessions:<repo>`, each
+  session its own `live:<id>`.
+- Never open a second pane that takes the keys from the board: a `Client` gets them only from
+  a click, nothing gives them back, and `Escape` never reaches it. Draw in the board's `Client`.
 - In the surface module, `setState` only from input handlers: three renders in a row that each call
   `setState` unmount the instance.
