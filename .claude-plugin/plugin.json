@@ -1,6 +1,6 @@
 {
   "name": "kanban-board",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A kanban board of the current repository's GitHub issues in a pane beside the transcript",
   "author": {
     "name": "Blindfold"
