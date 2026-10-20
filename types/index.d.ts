@@ -35,6 +35,8 @@ export type Board = {
   cards: Card[]
   containers: Container[]
   updatedAt: number
+  /** Why `p`/`P` do nothing here (no `Priority` issue field, not read yet); null while they work. */
+  priorityOff: string | null
 }
 
 export type BoardStatus = {
@@ -64,6 +66,10 @@ export type BoardMessage =
   | { type: 'refresh' }
   | { type: 'open'; number: number }
   | { type: 'detail'; number: number }
+  | { type: 'priority'; number: number; action: PriorityAction }
+
+/** `p` moves to the next Priority (none → Urgent → … → Low → none), `P` clears it. */
+export type PriorityAction = 'cycle' | 'clear'
 
 /** A blocker or the parent of an issue, as the detail popup links it. */
 export type IssueLink = { number: number; title: string; isOpen: boolean }

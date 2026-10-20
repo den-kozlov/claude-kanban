@@ -4,7 +4,7 @@
 
 import type { ElementTable, RenderChildren } from 'claude-code'
 
-import type { Detail, IssueDetail, IssueLink } from '../types'
+import type { Detail, IssueDetail, IssueLink, PriorityAction } from '../types'
 import { oneLine, truncate } from './lib/text'
 
 type Elements = Pick<ElementTable, 'Box' | 'Text' | 'Button' | 'Markdown'>
@@ -13,6 +13,7 @@ export type PopupActions = {
   /** Shows that issue in the popup and selects it on the board. */
   select: (number: number) => void
   open: (number: number) => void
+  priority: (number: number, action: PriorityAction) => void
 }
 
 const LABEL_WIDTH = 11
@@ -25,7 +26,7 @@ export function popupTitle(number: number, title: string | null): string {
 export function drawPopup(
   elements: Elements,
   detail: Detail,
-  where: { columns: number; column: string | null },
+  where: { columns: number; column: string | null; priorityOff: string | null },
   actions: PopupActions,
 ) {
   const { Box, Text, Button, Markdown } = elements
@@ -35,6 +36,21 @@ export function drawPopup(
       Open in browser
     </Button>
   )
+
+  // Priority (spec section 4): `p` cycles it; a second Button clears it.
+  const priorityButtons = (issue: IssueDetail) =>
+    where.priorityOff === null ? (
+      <Box flexDirection="row" columnGap={3}>
+        <Button key="priority" plain hotkey="p" onPress={() => actions.priority(issue.number, 'cycle')}>
+          Priority
+        </Button>
+        {issue.priority !== null && (
+          <Button key="priority-clear" plain onPress={() => actions.priority(issue.number, 'clear')}>
+            Clear Priority
+          </Button>
+        )}
+      </Box>
+    ) : null
 
   const field = (name: string, value: RenderChildren) => (
     <Box flexDirection="row">
@@ -105,6 +121,7 @@ export function drawPopup(
       <Text> </Text>
       <Box flexDirection="row" columnGap={3}>
         {openButton}
+        {detail.issue !== null && detail.issue.number === detail.number && priorityButtons(detail.issue)}
         <Text dimColor>Esc closes</Text>
       </Box>
     </Box>

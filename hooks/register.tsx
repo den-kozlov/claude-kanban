@@ -1,16 +1,35 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
-import type { Board, BoardMessage, BoardProps, BoardStatus, Detail } from '../types'
+import type { Board, BoardMessage, BoardProps, BoardStatus, Detail, Priority, PriorityAction } from '../types'
 import { detailOf } from './lib/detail'
-import { fetchIssue, fetchSnapshot, openIssue, readBranches, resolveRepo, type Shell } from './lib/github'
-import { buildBoard, COLUMNS, DEFAULT_CONFIG, type Snapshot } from './lib/model'
+import {
+  fetchIssue,
+  fetchPriorityField,
+  fetchSnapshot,
+  openIssue,
+  readBranches,
+  resolveRepo,
+  writePriority,
+  type Shell,
+} from './lib/github'
+import {
+  buildBoard,
+  COLUMNS,
+  DEFAULT_CONFIG,
+  nextPriority,
+  priorityOf,
+  type PriorityField,
+  type Snapshot,
+} from './lib/model'
 import { drawPopup, popupTitle } from './popup'
 
 const PANE = 'board'
 /** The detail popup: a second pane, shown over the board while open. */
 const POPUP = 'issue'
 const LOCAL_POLL_MS = 3000
+/** How long `p`/`P` wait after the last press before they write: the cycle is a roulette. */
+const PRIORITY_DELAY_MS = 2000
 
 const board = atom({ plugin: 'kanban-board', key: 'board' } as const, null)
 const status = atom({ plugin: 'kanban-board', key: 'status' } as const, { isLoading: false, error: null })
@@ -23,16 +42,29 @@ function isBoardMessage(data: unknown): data is BoardMessage {
   if (typeof data !== 'object' || data === null) return false
   const message = data as { type?: unknown; number?: unknown }
   if (message.type === 'refresh') return true
-  return (message.type === 'open' || message.type === 'detail') && Number.isInteger(message.number)
+  if (!Number.isInteger(message.number)) return false
+  if (message.type === 'priority') {
+    const { action } = data as { action?: unknown }
+    return action === 'cycle' || action === 'clear'
+  }
+  return message.type === 'open' || message.type === 'detail'
 }
+
+/**
+ * A Priority the board shows before GitHub says so. `readAfter` is the
+ * refresh after which GitHub's answer holds it: null while the write runs.
+ */
+type Override = { priority: Priority | null; readAfter: number | null }
 
 /** What the background work needs of the session, bound at `session.start`. */
 type Host = Shell & {
   now: () => Promise<number>
   every: (ms: number, fn: () => void) => Timer
+  after: (ms: number, fn: () => void) => Timer
   setBoard: (value: Board) => Promise<unknown>
   setStatus: (value: BoardStatus) => Promise<unknown>
   setDetail: (value: Detail) => Promise<unknown>
+  updateDetail: (fn: (value: Detail | null) => Detail | null) => Promise<unknown>
   /** Asks the board to select the card. */
   pick: (number: number) => Promise<unknown>
   /** Opens the popup, or retitles it when it is open. */
@@ -54,9 +86,31 @@ export const register: Register = on => {
   let fault: string | null = null
   // Grows with each issue the popup asks for: a slower, older load is dropped.
   let detailTicket = 0
+  // The owner's Priority field: undefined until read, null when the owner has none.
+  let priorityField: PriorityField | null | undefined
+  let priorityError: string | null = null
+  const overrides = new Map<number, Override>()
+  // The writes of each issue run one after another, so the last write wins.
+  const writes = new Map<number, Promise<void>>()
+  // The presses of each issue not yet written: the value and override before the first of them,
+  // and the timer that writes after the last.
+  const bursts = new Map<number, { base: Priority | null; before: Override | undefined; timer: Timer }>()
+  // Grows with each refresh that starts: what an override's `readAfter` counts in.
+  let refreshes = 0
+  // The node ids of issues the popup loaded that the board does not hold (containers' parents, old issues).
+  const loadedIds = new Map<number, string>()
+
+  const priorityOff = (): string | null => {
+    if (priorityField !== undefined) {
+      return priorityField === null ? `${repo?.split('/')[0] ?? 'the owner'} has no Priority issue field` : null
+    }
+    return priorityError === null ? 'Priority is not read yet' : `Priority could not be read: ${priorityError}`
+  }
 
   const publish = async (to: Host) => {
-    if (snapshot !== null) await to.setBoard(buildBoard(snapshot, branches, config, fetchedAt))
+    if (snapshot === null) return
+    const shown = new Map([...overrides].map(([number, one]) => [number, one.priority]))
+    await to.setBoard(buildBoard(snapshot, branches, config, fetchedAt, { overrides: shown, off: priorityOff() }))
   }
 
   const refresh = async (to: Host) => {
@@ -66,13 +120,32 @@ export const register: Register = on => {
       await to.setStatus({ isLoading: true, error: null })
       repo ??= await resolveRepo(to, cwd)
       const now = await to.now()
+      const started = ++refreshes
+      const at = repo
+      const field =
+        priorityField !== undefined
+          ? Promise.resolve()
+          : fetchPriorityField(to, cwd, at).then(
+              found => {
+                priorityField = found
+                priorityError = null
+              },
+              (error: unknown) => {
+                priorityError = messageOf(error)
+              },
+            )
       const [fetched, local] = await Promise.all([
-        fetchSnapshot(to, cwd, repo, config.doneDays, now),
+        fetchSnapshot(to, cwd, at, config.doneDays, now),
         readBranches(to, cwd),
+        field,
       ])
       snapshot = fetched
       fetchedAt = now
       branches = local
+      // GitHub's answer now holds every write that ended before this refresh started.
+      for (const [number, one] of overrides) {
+        if (one.readAfter !== null && one.readAfter < started) overrides.delete(number)
+      }
       await publish(to)
       await to.setStatus({ isLoading: false, error: null })
     } catch (error) {
@@ -101,12 +174,99 @@ export const register: Register = on => {
     await to.openPopup(popupTitle(number, title))
     try {
       repo ??= await resolveRepo(to, cwd)
-      const issue = detailOf(await fetchIssue(to, cwd, repo, number))
+      const raw = await fetchIssue(to, cwd, repo, number)
+      loadedIds.set(number, raw.id)
+      const override = overrides.get(number)
+      const issue = { ...detailOf(raw), ...(override === undefined ? {} : { priority: override.priority }) }
       if (ticket !== detailTicket) return
       await to.setDetail({ number, issue, isLoading: false, error: null })
       await to.openPopup(popupTitle(number, issue.title))
     } catch (error) {
       if (ticket === detailTicket) await to.setDetail({ number, issue: null, isLoading: false, error: messageOf(error) })
+    }
+  }
+
+  /** The issue's Priority as the board shows it: a write not yet read back, else GitHub's. */
+  const priorityNow = (number: number): Priority | null => {
+    const override = overrides.get(number)
+    if (override !== undefined) return override.priority
+    const known = snapshot === null ? [] : [...snapshot.open, ...snapshot.done]
+    const issue = known.find(one => one.number === number)
+    if (issue !== undefined) return priorityOf(issue)
+    return null
+  }
+
+  /** Shows `priority` on the card and in the popup at once, before GitHub has it. */
+  const showPriority = async (to: Host, number: number, priority: Priority | null) => {
+    await publish(to)
+    await to.updateDetail(shown =>
+      shown?.number === number && shown.issue !== null ? { ...shown, issue: { ...shown.issue, priority } } : shown,
+    )
+  }
+
+  /**
+   * `p` / `P` (spec section 4): the card moves at once; the write waits until
+   * the presses stop for `PRIORITY_DELAY_MS`. A failed write puts the card
+   * back and says why.
+   */
+  const changePriority = async (to: Host, number: number, action: PriorityAction, detailPriority: Priority | null) => {
+    const field = priorityField
+    if (field === undefined || field === null) {
+      to.toast(priorityOff() ?? 'Priority is off')
+      return
+    }
+    const known = snapshot === null ? [] : [...snapshot.open, ...snapshot.done]
+    const issueId = known.find(one => one.number === number)?.id ?? loadedIds.get(number)
+    if (issueId === undefined) {
+      to.toast(`#${number} is not loaded yet`)
+      return
+    }
+    const isKnown = overrides.has(number) || known.some(one => one.number === number)
+    const current = isKnown ? priorityNow(number) : detailPriority
+    const priority = nextPriority(current, action, field)
+    if (priority === current) return
+
+    const burst = bursts.get(number)
+    burst?.timer.cancel()
+    const mine: Override = { priority, readAfter: null }
+    const before = burst === undefined ? overrides.get(number) : burst.before
+    const base = burst === undefined ? current : burst.base
+    bursts.set(number, {
+      base,
+      before,
+      timer: to.after(PRIORITY_DELAY_MS, () => void writeLater(to, number, mine, issueId, field)),
+    })
+    overrides.set(number, mine)
+    await showPriority(to, number, priority)
+  }
+
+  /** The write after the presses stopped; none when they came back to where they started. */
+  const writeLater = async (to: Host, number: number, mine: Override, issueId: string, field: PriorityField) => {
+    const burst = bursts.get(number)
+    bursts.delete(number)
+    if (burst === undefined || overrides.get(number) !== mine) return
+    const { priority } = mine
+    if (priority === burst.base) {
+      if (burst.before === undefined) overrides.delete(number)
+      else overrides.set(number, burst.before)
+      await showPriority(to, number, priority)
+      return
+    }
+
+    const previous = writes.get(number) ?? Promise.resolve()
+    const write = previous.then(() => writePriority(to, cwd, issueId, field, priority))
+    writes.set(number, write.catch(() => undefined))
+    try {
+      await write
+      // A later press has its own override; this one is GitHub's from the next refresh on.
+      if (overrides.get(number) === mine) mine.readAfter = refreshes
+    } catch (error) {
+      if (overrides.get(number) === mine) {
+        overrides.delete(number)
+        await showPriority(to, number, priorityNow(number))
+      }
+      to.toast(`Could not set the Priority of #${number}: ${messageOf(error)}`)
+      void refresh(to)
     }
   }
 
@@ -137,9 +297,11 @@ export const register: Register = on => {
       sleep: ms => $.clock.sleep(ms),
       now: () => $.clock.now(),
       every: (ms, fn) => $.clock.every(ms, fn),
+      after: (ms, fn) => $.clock.after(ms, fn),
       setBoard: value => update($, board, () => value),
       setStatus: value => update($, status, () => value),
       setDetail: value => update($, detail, () => value),
+      updateDetail: fn => update($, detail, fn),
       pick: number => update($, pick, old => ({ number, seq: (old?.seq ?? 0) + 1 })),
       openPopup: title => $.ui.open({ id: POPUP, title, focus: true, closeOnEscape: true }),
       toast: text => $.ui.toast(text),
@@ -180,6 +342,7 @@ export const register: Register = on => {
     if (message.type === 'refresh') void refresh(to)
     if (message.type === 'open') openInBrowser(to, message.number)
     if (message.type === 'detail') void showIssue(to, message.number)
+    if (message.type === 'priority') void changePriority(to, message.number, message.action, null)
     return next(e)
   })
 
@@ -220,10 +383,12 @@ export const register: Register = on => {
       const { Text } = elements
       return <Text dimColor>No issue chosen.</Text>
     }
-    const card = (await read($, board))?.cards.find(one => one.number === shown.number)
+    const current = await read($, board)
+    const card = current?.cards.find(one => one.number === shown.number)
     const column = COLUMNS.find(one => one.id === card?.column)?.title ?? null
+    const where = { columns: e.props.bodyColumns, column, priorityOff: current?.priorityOff ?? priorityOff() }
 
-    return drawPopup(elements, shown, { columns: e.props.bodyColumns, column }, {
+    return drawPopup(elements, shown, where, {
       select: number => {
         const to = host
         if (to !== null) void showIssue(to, number)
@@ -231,6 +396,10 @@ export const register: Register = on => {
       open: number => {
         const to = host
         if (to !== null) openInBrowser(to, number)
+      },
+      priority: (number, action) => {
+        const to = host
+        if (to !== null) void changePriority(to, number, action, shown.issue?.priority ?? null)
       },
     })
   })

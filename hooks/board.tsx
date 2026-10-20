@@ -143,6 +143,14 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       case 'o':
         if (computed.selected !== null) post({ type: 'open', number: computed.selected })
         return
+      case 'p':
+      case 'P':
+        // The hooks module writes it, or says in a toast why it cannot.
+        if (computed.selected !== null) {
+          const action = event.key === 'P' || event.shift === true ? 'clear' : 'cycle'
+          post({ type: 'priority', number: computed.selected, action })
+        }
+        return
       case 'r':
         post({ type: 'refresh' })
         return
@@ -183,7 +191,10 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
     else if (props.status.isLoading) parts.push({ text: '  refreshing…', tone: 'dim' })
     else if (board != null) parts.push({ text: `  updated ${clockOf(board.updatedAt)}`, tone: 'dim' })
 
-    const hints = props.isFocused ? '←↑↓→ ⏎ details  o open  r refresh  d done  f filter' : 'click the board for keys'
+    const priorityHint = board?.priorityOff === null ? '  p/P priority' : ''
+    const hints = props.isFocused
+      ? `←↑↓→ ⏎ details  o open${priorityHint}  r refresh  d done  f filter`
+      : 'click the board for keys'
     const left = parts.reduce((sum, part) => sum + cellWidth(part.text), 0)
     const room = size.columns - left - 2
     return (

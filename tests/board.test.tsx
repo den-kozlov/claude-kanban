@@ -27,6 +27,7 @@ const OPEN = [
 ]
 
 const DETAIL = {
+  id: 'I_2',
   number: 2,
   title: 'Fix the login',
   url: 'https://github.com/o/r/issues/2',
@@ -49,13 +50,26 @@ const DETAIL = {
 
 const page = <T,>(nodes: T[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes })
 
-/** Stands for git and gh beneath the plugin; returns the argv of every `gh issue view`. */
-function fakeHost(on: On): string[][] {
+const PRIORITY_FIELD = {
+  __typename: 'IssueFieldSingleSelect',
+  id: 'F_priority',
+  name: 'Priority',
+  options: ['Urgent', 'High', 'Medium', 'Low'].map(name => ({ id: `O_${name}`, name })),
+}
+
+type HostOptions = { owner?: 'organization' | 'user'; failWrites?: boolean }
+
+/**
+ * Stands for git and gh beneath the plugin. Returns the argv of every
+ * `gh issue view` and the variables of every Priority write.
+ */
+function fakeHost(on: On, options: HostOptions = {}) {
   const opened: string[][] = []
+  const writes: Record<string, string>[] = []
   on('process.run', (_, e) => {
     const [tool, command] = e.argv
-    const answer = (stdout: string) => ({
-      value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    const answer = (stdout: string, exitCode = 0) => ({
+      value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'HTTP 403', isStdoutTruncated: false, isStderrTruncated: false },
     })
     if (tool === 'gh' && command === 'repo') return answer('o/r\n')
     if (tool === 'gh' && command === 'issue') {
@@ -64,6 +78,21 @@ function fakeHost(on: On): string[][] {
     }
     if (tool === 'gh' && command === 'api') {
       const query = e.argv.find(arg => arg.startsWith('query=')) ?? ''
+      if (query.includes('repositoryOwner(')) {
+        const owner =
+          options.owner === 'user'
+            ? { __typename: 'User' }
+            : { __typename: 'Organization', issueFields: { nodes: [{ __typename: 'IssueFieldDate' }, PRIORITY_FIELD] } }
+        return answer(JSON.stringify({ data: { repositoryOwner: owner } }))
+      }
+      if (query.includes('IssueFieldValue(')) {
+        if (options.failWrites === true) return answer('', 1)
+        const variables = e.argv
+          .filter(arg => !arg.startsWith('query=') && arg.includes('='))
+          .map(arg => arg.split('=') as [string, string])
+        writes.push({ mutation: query.includes('setIssueFieldValue(') ? 'set' : 'delete', ...Object.fromEntries(variables) })
+        return answer(JSON.stringify({ data: { ok: true } }))
+      }
       if (query.includes('issue(number:')) {
         const number = Number(e.argv.find(arg => arg.startsWith('number='))?.slice('number='.length))
         const title = OPEN.find(one => one.number === number)?.title ?? `Issue ${number}`
@@ -80,7 +109,7 @@ function fakeHost(on: On): string[][] {
     }
     return answer('')
   })
-  return opened
+  return { opened, writes }
 }
 
 /** Stands for the engine's panes; returns what each `$.ui.open` asked and the panes open. */
@@ -103,12 +132,17 @@ function fakePanes(on: On) {
 }
 
 /** Starts a session and opens the board in it. */
-async function openBoard($: Engine, on: On) {
+async function openBoard($: Engine, on: On, options: HostOptions = {}) {
   const clock = mock.clock(on, { now: Date.UTC(2026, 9, 20, 12) })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: { command: 'board' } }))
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
   const panes = fakePanes(on)
-  const opened = fakeHost(on)
+  const { opened, writes } = fakeHost(on, options)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await $.command.run({
@@ -118,7 +152,7 @@ async function openBoard($: Engine, on: On) {
     presentation: { isFullscreen: true, columns: 200 },
   })
   await clock.settle()
-  return { clock, panes, opened }
+  return { clock, panes, opened, writes, toasts }
 }
 
 test('the board shows the issues in their columns and answers its keys', async ($, on) => {
@@ -193,6 +227,97 @@ test('Enter opens the detail popup; its links select the issue on the board', as
     presentation: { isFullscreen: true, columns: 200 },
   })
   expect([...panes.open.keys()]).toEqual([])
+
+  await popup.unmount()
+  await board.unmount()
+})
+
+test('p cycles the Priority of the selected card and P clears it; the card moves at once', async ($, on) => {
+  const { clock, writes } = await openBoard($, on)
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = async (pattern: RegExp) => (await board.find({ type: 'Text', text: pattern, in: 'board' }))?.text
+
+  expect(await text(/p\/P priority/)).toBeDefined()
+  // → selects #1, High.
+  await board.key({ key: 'right', in: 'board' })
+  expect(await text(/^High$/)).toBeDefined()
+
+  // The card moves with each press; one write goes 2 s after the last press.
+  await board.key({ key: 'p', in: 'board' })
+  expect(await text(/^Medium$/)).toBeDefined()
+  await clock.advance(1000)
+  await board.key({ key: 'p', in: 'board' })
+  expect(await text(/^Low$/)).toBeDefined()
+  await clock.advance(1999)
+  expect(writes).toEqual([])
+  await clock.advance(1)
+  expect(writes).toEqual([{ mutation: 'set', issue: 'I_1', field: 'F_priority', option: 'O_Low' }])
+
+  await board.key({ key: 'P', shift: true, in: 'board' })
+  expect(await text(/^Low$/)).toBeUndefined()
+  await clock.advance(2000)
+  expect(writes.at(-1)).toEqual({ mutation: 'delete', issue: 'I_1', field: 'F_priority' })
+
+  // A refresh that starts after the writes ended shows GitHub's answer (the fake still says High).
+  await board.key({ key: 'r', in: 'board' })
+  await clock.settle()
+  expect(await text(/^High$/)).toBeDefined()
+
+  // Round the whole cycle back to High: nothing to write.
+  for (let press = 0; press < 5; press += 1) await board.key({ key: 'p', in: 'board' })
+  await clock.advance(2000)
+  expect(writes).toHaveLength(2)
+  expect(await text(/^High$/)).toBeDefined()
+
+  await board.unmount()
+})
+
+test('a failed Priority write puts the card back and says why', async ($, on) => {
+  const { clock, toasts } = await openBoard($, on, { failWrites: true })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = async (pattern: RegExp) => (await board.find({ type: 'Text', text: pattern, in: 'board' }))?.text
+
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'p', in: 'board' })
+  expect(await text(/^Medium$/)).toBeDefined()
+  // The write goes 2 s after the press, and is tried again after 1, 2 and 4 seconds before it fails.
+  await clock.advance(2000 + 8000)
+
+  expect(await text(/^High$/)).toBeDefined()
+  expect(toasts.at(-1)).toBe('Could not set the Priority of #1: HTTP 403')
+  await board.unmount()
+})
+
+test('p does nothing but a toast where the owner has no Priority field', async ($, on) => {
+  const { clock, writes, toasts } = await openBoard($, on, { owner: 'user' })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await board.find({ type: 'Text', text: /p\/P priority/, in: 'board' })).toBeUndefined()
+  await board.key({ key: 'p', in: 'board' })
+  await clock.settle()
+
+  expect(writes).toEqual([])
+  expect(toasts.at(-1)).toBe('o has no Priority issue field')
+  await board.unmount()
+})
+
+test('the popup cycles the Priority with p', async ($, on) => {
+  const { clock, writes } = await openBoard($, on)
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // → #1, ↓ #2: no Priority.
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'down', in: 'board' })
+  await board.key({ key: 'return', in: 'board' })
+  await clock.settle()
+
+  const popup = await $.ui.mount({ ...PANE, requestId: 'issue', props: { ...PANE.props, title: '#2' }, surface: 'terminal' })
+  expect(await popup.find({ type: 'Button', key: 'priority-clear' })).toBeUndefined()
+  await popup.press({ key: 'priority' })
+  await clock.advance(2000)
+
+  expect(writes.at(-1)).toEqual({ mutation: 'set', issue: 'I_2', field: 'F_priority', option: 'O_Urgent' })
+  expect(await popup.find({ type: 'Text', text: /Priority Urgent/ })).toBeDefined()
+  expect(await board.find({ type: 'Text', text: /^Urgent$/, in: 'board' })).toBeDefined()
 
   await popup.unmount()
   await board.unmount()

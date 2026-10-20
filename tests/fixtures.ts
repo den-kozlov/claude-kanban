@@ -4,6 +4,7 @@ import type { RawIssue, RawPr } from '../hooks/lib/model'
 export function issue(number: number, extra: Partial<RawIssue> & { labelNames?: string[]; priority?: string } = {}): RawIssue {
   const { labelNames = [], priority, ...rest } = extra
   return {
+    id: `I_${number}`,
     number,
     title: `Issue ${number}`,
     labels: { nodes: labelNames.map(name => ({ name })) },

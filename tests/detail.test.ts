@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { detailOf, markdownOf, type RawIssueDetail } from '../hooks/lib/detail'
 
 const raw = (extra: Partial<RawIssueDetail> = {}): RawIssueDetail => ({
+  id: 'I_7',
   number: 7,
   title: 'A\ntitle',
   url: 'https://github.com/o/r/issues/7',

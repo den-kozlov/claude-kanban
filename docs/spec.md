@@ -1,6 +1,6 @@
 # claude-kanban: design spec
 
-Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1 and 2
+Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–3
 of the delivery plan are built (section 12 says what each stage left for later).
 
 A Claude Code mod that shows the GitHub issues of the current repository as a kanban board in a
@@ -46,6 +46,7 @@ under another. The board sizes its tree to `e.props.bodyColumns`.
 
 A full card shows:
 - `#N` and the title (up to two lines);
+- its Priority, when it has one (added in stage 3, so `p` shows what it set);
 - up to three labels (container and column labels excluded);
 - the comment count;
 - a session badge: working / waiting for input / ended (section 8);
@@ -80,6 +81,28 @@ High, Medium, Low), not a label and not a Projects v2 field.
 - A repository whose owner has no `Priority` issue field (a user account, or an org without it):
   every issue has one level and `p`/`P` are disabled. No label fallback.
 
+As built (stage 3):
+- The board reads the field once per session, with the first refresh:
+  `repositoryOwner(login){ ... on Organization { issueFields(first:50) } }`, the
+  `IssueFieldSingleSelect` named `Priority`, and each option by its name. A user account answers
+  no fields. A failed read is tried again at the next refresh; until then `p`/`P` are off.
+- The issue queries now ask for the node `id` (the writes take it), and the Done query reads
+  `issueFieldValues` too, so a Done card shows its Priority.
+- `p` cycles through the options the field has, from the value the card shows. `P` on a card
+  with no Priority does nothing.
+- The presses are a roulette, so the board writes once, 2 seconds after the last press on that
+  issue (each press starts the wait again). When the presses come back to the value they started
+  from, nothing is written. The writes of one issue run one after another. Each write goes
+  through the same retry as a query (setting or clearing a value twice does no harm). A hot
+  reload of the mod inside those 2 seconds drops the write.
+- The card shows the new value at once. The board keeps it over GitHub's answer until a refresh
+  that started after the write ended. A failed write drops it, shows
+  `Could not set the Priority of #N: <reason>` in a toast and refreshes the board.
+- Where `p`/`P` are off, they show the reason in a toast (for example `<owner> has no Priority
+  issue field`), and the hints leave them out.
+- The popup has a `Priority` button (hotkey `p`, it cycles) and a `Clear Priority` button while
+  the issue has one. They show only where Priority is on.
+
 ## 5. Keys and the detail popup
 
 | Key | Action |
@@ -104,7 +127,7 @@ the keys. A link loads that issue into the same popup, retitles the tab and asks
 select the card (the `pick` state; the board takes it when the card is in view). The body is cut
 at 20,000 characters and each comment at 4,000 (a code fence the cut leaves open is closed), so
 the popup stays under a drawing's 100,000 characters. `/board` closing the board closes the popup
-too. Start and Priority come with stages 4 and 3.
+too. Start comes with stage 4; Priority came with stage 3 (section 4).
 
 ## 6. Data and refresh
 
@@ -250,21 +273,24 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 | Stage | State | Built | Left for later |
 |---|---|---|---|
 | 1. Read-only board | done | Sections 2, 3 (without the session badge), 6 and 9; keys arrows/click, `o`, `r`, `d`, `f`; Priority read and card order | The session badge (stage 5); session records in In progress (stage 5) |
-| 2. Detail popup | done | Section 5's popup: `Enter`, the fields, links that select, Markdown body, the last three comments, Open in browser (`o`), `Esc` | The Start button (stage 4) and the Priority button (stage 3) |
-| 3. Priority | partly | Read: `issueFieldValues` by field name, card order (stage 1) | Field and option ids from `organization.issueFields`; `p`/`P` writes, optimistic move, revert with a toast; `p`/`P` off without the field |
+| 2. Detail popup | done | Section 5's popup: `Enter`, the fields, links that select, Markdown body, the last three comments, Open in browser (`o`), `Esc` | The Start button (stage 4) |
+| 3. Priority | done | Section 4: read (stage 1), field and option ids by name, `p`/`P` on the board and in the popup, the move at once, revert with a toast, off without the field; the Priority on full cards | — |
 | 4. Starting cards | not started | — | Everything in section 7 |
 | 5. Session tracking | not started | — | Everything in section 8; badges on cards |
 | 6. Configuration file | not started | `Config` and `DEFAULT_CONFIG` in `hooks/lib/model.ts` hold section 10's shape (no `launch` yet) | Reading `.claude/kanban.json` and merging it over the defaults |
 
 ## 13. Open checks for implementation
 
-Learned while building stages 1 and 2:
+Learned while building stages 1–3:
 - A `Client` gets keys only after the person clicks it; `Escape` gives them back.
 - The engine's diff panel (`/diff`) takes the dock: a mod pane stays open and placed but is not
   drawn while it shows.
 - The owner checked the popup by hand in a live session on 2026-10-20: it works. The board's
   selection does not depend on the board's `Client` keeping its state while the popup covers it:
   the popup's `pick` selects the issue it last showed.
+- To check by hand: the Priority writes against a real issue. The tests cover them with a fake
+  `gh`; the field read was checked live against an organization with the field, the
+  mutations only against GitHub's schema.
 
 Still open:
 

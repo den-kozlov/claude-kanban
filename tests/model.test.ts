@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { buildBoard, DEFAULT_CONFIG, prsByIssue, viewColumns, type Snapshot } from '../hooks/lib/model'
+import {
+  buildBoard,
+  DEFAULT_CONFIG,
+  nextPriority,
+  priorityFieldOf,
+  prsByIssue,
+  viewColumns,
+  type Snapshot,
+} from '../hooks/lib/model'
+import type { Priority } from '../types'
 import { issue, pr } from './fixtures'
 
 const snapshot = (part: Partial<Snapshot>): Snapshot => ({ repo: 'o/r', open: [], done: [], prs: [], ...part })
@@ -144,5 +153,58 @@ describe('review detection', () => {
     expect(byIssue.get(1)?.ci).toBe('success')
     expect(byIssue.get(2)?.ci).toBe('failure')
     expect(byIssue.get(4)).toEqual({ number: 12, isDraft: false, ci: 'pending' })
+  })
+})
+
+describe('priority', () => {
+  const field = priorityFieldOf([
+    { __typename: 'IssueFieldDate' },
+    {
+      __typename: 'IssueFieldSingleSelect',
+      id: 'F1',
+      name: 'Effort',
+      options: [{ id: 'E1', name: 'High' }],
+    },
+    {
+      __typename: 'IssueFieldSingleSelect',
+      id: 'F2',
+      name: 'Priority',
+      options: ['Urgent', 'High', 'Medium', 'Low'].map(name => ({ id: `O_${name}`, name })),
+    },
+  ])
+
+  test('the Priority field and its options are found by name', async () => {
+    expect(field).toEqual({
+      fieldId: 'F2',
+      options: { Urgent: 'O_Urgent', High: 'O_High', Medium: 'O_Medium', Low: 'O_Low' },
+    })
+    expect(priorityFieldOf([{ __typename: 'IssueFieldSingleSelect', id: 'F1', name: 'Effort' }])).toBeNull()
+  })
+
+  test('p cycles none → Urgent → High → Medium → Low → none, P clears', async () => {
+    if (field === null) throw new Error('no field')
+    const seen: (Priority | null)[] = [null]
+    for (let step = 0; step < 5; step += 1) seen.push(nextPriority(seen.at(-1) ?? null, 'cycle', field))
+
+    expect(seen).toEqual([null, 'Urgent', 'High', 'Medium', 'Low', null])
+    expect(nextPriority('High', 'clear', field)).toBeNull()
+    // A field without some options cycles through those it has.
+    expect(nextPriority('Urgent', 'cycle', { fieldId: 'F', options: { Urgent: 'u', Low: 'l' } })).toBe('Low')
+  })
+
+  test('a write not yet read back wins over GitHub, and the board says when Priority is off', async () => {
+    const board = buildBoard(
+      snapshot({ open: [issue(1, { priority: 'Low' }), issue(2, { priority: 'High' })] }),
+      [],
+      DEFAULT_CONFIG,
+      0,
+      { overrides: new Map([[1, 'Urgent']]), off: 'o has no Priority issue field' },
+    )
+
+    expect(board.cards.map(card => [card.number, card.priority])).toEqual([
+      [1, 'Urgent'],
+      [2, 'High'],
+    ])
+    expect(board.priorityOff).toBe('o has no Priority issue field')
   })
 })

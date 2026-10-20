@@ -26,10 +26,13 @@ export type CardLines = { title: string[]; meta: Segment[] }
 
 const CI_MARK = { success: '✓', failure: '✗', pending: '•' } as const
 
+const PRIORITY_TONE = { Urgent: 'failure', High: 'pending', Medium: 'plain', Low: 'dim' } as const
+
 /** The lines of a full card `width` cells wide (gutter excluded). */
 export function fullCard(card: Card, width: number): CardLines {
   const title = wrap(`#${card.number} ${oneLine(card.title)}`, width, TITLE_LINES)
   const parts: Segment[] = []
+  if (card.priority !== null) parts.push({ text: card.priority, tone: PRIORITY_TONE[card.priority] })
   if (card.pr !== null) {
     const ci = card.pr.ci
     parts.push({

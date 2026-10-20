@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Claude Code mod (a plugin of function hooks) named `kanban-board`: a kanban board of the current
 repository's GitHub issues in a pane beside the transcript, opened and closed with `/board`. The
 design is `docs/spec.md`; its section 12 is the delivery plan and a table of what is built.
-Stages 1 (read-only board) and 2 (detail popup) are built; Priority writes, starting cards,
+Stages 1 (read-only board), 2 (detail popup) and 3 (Priority writes) are built; starting cards,
 session tracking and the config file are not.
 
 The repository root is the plugin folder. The plugin name cannot start with `claude-` (the
@@ -37,20 +37,22 @@ Two runtimes talk through messages:
   only hands that state as props to a `Client`. It also owns the detail popup, a second pane
   (`issue`): it loads the issue into the `detail` state and draws it with `hooks/popup.tsx`, plain
   elements the engine scrolls. A link there sets the `pick` state, which the board takes as its
-  selection once.
+  selection once. It writes Priority (`p`/`P` from either pane): the new value shows at once as an
+  override over GitHub's, kept until a refresh that started after the write ended.
 - `hooks/board.tsx`, the `Client`'s surface module. It runs on the drawing thread with no `$`. It owns
   what belongs to the viewer: the selection, Done shown or hidden, the container filter and each
   column's scroll window. It handles raw keys and pointer events, and posts `refresh` / `open` /
-  `detail` to the hooks module (`ui.message`). Keys reach it only after the person clicks the board.
+  `detail` / `priority` to the hooks module (`ui.message`). Keys reach it only after the person clicks the board.
 
 Pure logic, shared by both and covered by the tests:
 
-- `hooks/lib/model.ts` — the column rules and their precedence, PR and branch matching, card order.
+- `hooks/lib/model.ts` — the column rules and their precedence, PR and branch matching, card order,
+  the Priority field by name and the `p` cycle.
 - `hooks/lib/layout.ts` — the cell-exact layout: side-by-side or stacked columns, collapse to
   one-line rows, scroll windows, arrow navigation, hit testing. The surface module draws exactly
   these rows, so every text is cut by `hooks/lib/text.ts`, never wrapped by the terminal.
-- `hooks/lib/github.ts` — the `gh api graphql` queries (own pagination, retry with backoff for
-  the `EOF` failures) and the git reads.
+- `hooks/lib/github.ts` — the `gh api graphql` queries and Priority mutations (own pagination,
+  retry with backoff for the `EOF` failures) and the git reads.
 - `hooks/lib/detail.ts` — the popup's issue from GitHub's answer; Markdown cleaned and cut.
 
 ## Platform rules that bite

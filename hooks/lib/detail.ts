@@ -13,6 +13,7 @@ const TITLE_LIMIT = 200
 type RawLink = { number: number; title: string; state: string }
 
 export type RawIssueDetail = {
+  id: string
   number: number
   title: string
   url: string

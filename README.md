@@ -26,13 +26,18 @@ Claude Code reads the mod from that folder: after an edit, run `/reload-plugins`
 | arrows / click | select a card |
 | `Enter` | open the detail popup of the card (`Esc` closes it) |
 | `o` | open the issue in the browser |
+| `p` / `P` | next Priority (none → Urgent → High → Medium → Low → none) / clear it |
 | `r` | refresh now |
 | `d` | show / hide Done |
 | `f` | filter by a container (`prd`, `ideas`, `wayfinder:map`) |
 
 The detail popup shows the labels, Priority, assignees, parent and blockers (press one to show
 that issue and select it on the board), the description and the last three comments; `o` there
-opens the issue in the browser.
+opens the issue in the browser, `p` sets the next Priority.
+
+Priority is the organization's `Priority` issue field. The card moves with each press; the board
+writes the value 2 seconds after the last press. Where the repository's owner has no such
+field (a user account, or an organization without it), `p` and `P` are off.
 
 Needs `gh` signed in to GitHub. The board shares its place with Claude Code's diff panel: when you
 do not see the board, hide the diff panel with `/diff`.

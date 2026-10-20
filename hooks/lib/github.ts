@@ -3,14 +3,22 @@
 
 import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
 
+import type { Priority } from '../../types'
 import type { RawIssueDetail } from './detail'
-import type { RawIssue, RawPr, Snapshot } from './model'
+import { priorityFieldOf, type PriorityField, type RawIssue, type RawIssueField, type RawPr, type Snapshot } from './model'
+
+const FIELD_VALUES = `
+  issueFieldValues(first:10){nodes{
+    __typename
+    ... on IssueFieldSingleSelectValue{ name field{ ... on IssueFieldSingleSelect{ name } } }
+  }}`
 
 const ISSUE_FIELDS = `
-  number title
+  id number title
   labels(first:20){nodes{name}}
   comments{totalCount}
-  parent{number}`
+  parent{number}
+  ${FIELD_VALUES}`
 
 // Section 9 of the spec; the body and the comments wait for the popup.
 const OPEN_ISSUES = `query($owner:String!,$name:String!,$endCursor:String){
@@ -20,10 +28,6 @@ const OPEN_ISSUES = `query($owner:String!,$name:String!,$endCursor:String){
       nodes{
         ${ISSUE_FIELDS}
         blockedBy(first:20){nodes{number state}}
-        issueFieldValues(first:10){nodes{
-          __typename
-          ... on IssueFieldSingleSelectValue{ name field{ ... on IssueFieldSingleSelect{ name } } }
-        }}
         closedByPullRequestsReferences(first:10, includeClosedPrs:false){nodes{number state isDraft}}
       }
     }
@@ -50,18 +54,34 @@ const DONE_ISSUES = `query($q:String!,$endCursor:String){
 const ISSUE_DETAIL = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     issue(number:$number){
-      number title url state body
+      id number title url state body
       labels(first:20){nodes{name}}
       assignees(first:10){nodes{login}}
       blockedBy(first:20){nodes{number title state}}
       parent{number title state}
-      issueFieldValues(first:10){nodes{
-        __typename
-        ... on IssueFieldSingleSelectValue{ name field{ ... on IssueFieldSingleSelect{ name } } }
-      }}
+      ${FIELD_VALUES}
       comments(last:3){totalCount nodes{ author{login} createdAt body }}
     }
   }
+}`
+
+// Spec section 4: the owner's issue fields, to find `Priority` and its option ids by name.
+const ISSUE_FIELD_DEFS = `query($owner:String!){
+  repositoryOwner(login:$owner){
+    __typename
+    ... on Organization{ issueFields(first:50){ nodes{
+      __typename
+      ... on IssueFieldSingleSelect{ id name options{ id name } }
+    } } }
+  }
+}`
+
+const SET_FIELD_VALUE = `mutation($issue:ID!,$field:ID!,$option:ID!){
+  setIssueFieldValue(input:{issueId:$issue, issueFields:[{fieldId:$field, singleSelectOptionId:$option}]}){ clientMutationId }
+}`
+
+const DELETE_FIELD_VALUE = `mutation($issue:ID!,$field:ID!){
+  deleteIssueFieldValue(input:{issueId:$issue, fieldId:$field}){ success }
 }`
 
 /** What the reads need of the host: `$.process.run` and `$.clock.sleep`, wrapped by the hooks module. */
@@ -209,6 +229,35 @@ export async function fetchIssue(shell: Shell, cwd: string, repo: string, number
   }
   if (data.repository.issue === null) throw new Error(`#${number} is not an issue of ${repo}`)
   return data.repository.issue
+}
+
+/**
+ * The `Priority` issue field of the repository's owner; null for a user
+ * account or an organization without it.
+ */
+export async function fetchPriorityField(shell: Shell, cwd: string, repo: string): Promise<PriorityField | null> {
+  const [owner = ''] = repo.split('/')
+  const data = (await graphql(shell, cwd, ISSUE_FIELD_DEFS, { owner })) as {
+    repositoryOwner: { __typename: string; issueFields?: { nodes: RawIssueField[] } } | null
+  }
+  return priorityFieldOf(data.repositoryOwner?.issueFields?.nodes ?? [])
+}
+
+/** Sets the issue's Priority, or clears it (null). Never the REST `PUT`: it replaces every field value. */
+export async function writePriority(
+  shell: Shell,
+  cwd: string,
+  issueId: string,
+  field: PriorityField,
+  priority: Priority | null,
+): Promise<void> {
+  if (priority === null) {
+    await graphql(shell, cwd, DELETE_FIELD_VALUE, { issue: issueId, field: field.fieldId })
+    return
+  }
+  const option = field.options[priority]
+  if (option === undefined) throw new Error(`the Priority field has no option ${priority}`)
+  await graphql(shell, cwd, SET_FIELD_VALUE, { issue: issueId, field: field.fieldId, option })
 }
 
 /** Opens the issue in the browser. */

@@ -56,6 +56,8 @@ const LABEL_COLUMNS = ['triage', 'needsInfo', 'readyForAgent', 'readyForHuman'] 
 export const PRIORITIES: readonly Priority[] = ['Urgent', 'High', 'Medium', 'Low']
 
 export type RawIssue = {
+  /** The node id, which the Priority writes take. */
+  id: string
   number: number
   title: string
   labels: { nodes: { name: string }[] }
@@ -64,6 +66,34 @@ export type RawIssue = {
   blockedBy?: { nodes: { number: number; state: string }[] }
   issueFieldValues?: { nodes: RawFieldValue[] }
   closedByPullRequestsReferences?: { nodes: { number: number; state: string; isDraft: boolean }[] }
+}
+
+/** The owner's `Priority` issue field: its id and the id of each option it has. */
+export type PriorityField = { fieldId: string; options: Partial<Record<Priority, string>> }
+
+export type RawIssueField = { __typename?: string; id?: string; name?: string; options?: { id: string; name: string }[] }
+
+/** The `Priority` single select among the owner's issue fields, found by name; null when there is none. */
+export function priorityFieldOf(fields: RawIssueField[]): PriorityField | null {
+  const field = fields.find(one => one.__typename === 'IssueFieldSingleSelect' && one.name === 'Priority')
+  if (field?.id === undefined) return null
+  const options: Partial<Record<Priority, string>> = {}
+  for (const option of field.options ?? []) {
+    const name = PRIORITIES.find(one => one === option.name)
+    if (name !== undefined) options[name] = option.id
+  }
+  return { fieldId: field.id, options }
+}
+
+/** What `p` (cycle) or `P` (clear) makes of `current`, among the options the field has. */
+export function nextPriority(
+  current: Priority | null,
+  action: 'cycle' | 'clear',
+  field: PriorityField,
+): Priority | null {
+  if (action === 'clear') return null
+  const steps: (Priority | null)[] = [null, ...PRIORITIES.filter(one => field.options[one] !== undefined)]
+  return steps[(steps.indexOf(current) + 1) % steps.length] ?? null
 }
 
 export type RawFieldValue = {
@@ -184,7 +214,15 @@ function columnOf(
   return LABEL_COLUMNS.find(id => config.columns[id].some(label => labels.includes(label))) ?? 'triage'
 }
 
-function cardOf(issue: RawIssue, column: ColumnId, config: Config): Omit<Card, 'pr' | 'isSandcastle'> {
+/** Priorities the board shows ahead of GitHub: the writes it has sent and not yet read back. */
+export type PriorityOverrides = ReadonlyMap<number, Priority | null>
+
+function cardOf(
+  issue: RawIssue,
+  column: ColumnId,
+  config: Config,
+  overrides: PriorityOverrides,
+): Omit<Card, 'pr' | 'isSandcastle'> {
   const hidden = new Set([...config.containers, ...Object.values(config.columns).flat()])
   return {
     number: issue.number,
@@ -194,7 +232,7 @@ function cardOf(issue: RawIssue, column: ColumnId, config: Config): Omit<Card, '
       .filter(label => !hidden.has(label))
       .slice(0, 3),
     comments: issue.comments.totalCount,
-    priority: priorityOf(issue),
+    priority: overrides.has(issue.number) ? (overrides.get(issue.number) ?? null) : priorityOf(issue),
     parent: issue.parent?.number ?? null,
   }
 }
@@ -204,7 +242,9 @@ export function buildBoard(
   branches: string[],
   config: Config,
   updatedAt: number,
+  priority: { overrides?: PriorityOverrides; off?: string | null } = {},
 ): Board {
+  const overrides = priority.overrides ?? new Map()
   const prs = prsByIssue(snapshot.prs, config)
   const inProgress = branchesByIssue(branches, config)
   const containers: Container[] = []
@@ -212,7 +252,7 @@ export function buildBoard(
 
   for (const issue of snapshot.done) {
     if (isContainer(issue, config)) continue
-    cards.push({ ...cardOf(issue, 'done', config), pr: null, isSandcastle: false })
+    cards.push({ ...cardOf(issue, 'done', config, overrides), pr: null, isSandcastle: false })
   }
 
   for (const issue of snapshot.open) {
@@ -226,12 +266,12 @@ export function buildBoard(
       (linked === undefined ? null : { number: linked.number, isDraft: linked.isDraft, ci: null })
     const branch = inProgress.get(issue.number)
     const column = columnOf(issue, config, pr, branch !== undefined)
-    cards.push({ ...cardOf(issue, column, config), pr, isSandcastle: branch?.isSandcastle === true })
+    cards.push({ ...cardOf(issue, column, config, overrides), pr, isSandcastle: branch?.isSandcastle === true })
   }
 
   containers.sort((a, b) => a.number - b.number)
   cards.sort(compareCards)
-  return { repo: snapshot.repo, cards, containers, updatedAt }
+  return { repo: snapshot.repo, cards, containers, updatedAt, priorityOff: priority.off ?? null }
 }
 
 export type ViewOptions = { showDone: boolean; filter: number | null }
