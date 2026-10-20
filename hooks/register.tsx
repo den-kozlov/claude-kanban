@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
 import type { Board, BoardMessage, BoardProps, BoardStatus, Detail, Priority, PriorityAction, SessionState } from '../types'
+import { CONFIG_PATH, configOf } from './lib/config'
 import { detailOf } from './lib/detail'
 import {
   fetchIssue,
@@ -11,6 +12,7 @@ import {
   openIssue,
   readBranches,
   resolveRepo,
+  worktreeRoot,
   writePriority,
   type Shell,
 } from './lib/github'
@@ -28,6 +30,7 @@ import {
 import {
   buildBoard,
   DEFAULT_CONFIG,
+  type Config,
   launchIn,
   nextPriority,
   priorityOf,
@@ -59,7 +62,7 @@ const PRIORITY_DELAY_MS = 2000
  * Change the tag whenever `Card` or `Board` changes: the new code then reads no board until it
  * builds one.
  */
-const BOARD_SHAPE = 'stage-5'
+const BOARD_SHAPE = 'stage-6'
 const board = atom({ plugin: 'kanban-board', key: 'board' } as const, null, { shape: BOARD_SHAPE })
 const status = atom({ plugin: 'kanban-board', key: 'status' } as const, { isLoading: false, error: null })
 const pick = atom({ plugin: 'kanban-board', key: 'pick' } as const, null)
@@ -117,10 +120,20 @@ type Host = Shell & {
   /** Asks the board to select the card. */
   pick: (number: number) => Promise<unknown>
   toast: (text: string) => void
+  log: (text: string) => void
+  /** The file's text; null when there is no such file. */
+  readText: (path: string) => Promise<string | null>
 }
 
 export const register: Register = on => {
-  const config = DEFAULT_CONFIG
+  // The defaults with `.claude/kanban.json` over them, read again at each refresh.
+  let config: Config = DEFAULT_CONFIG
+  // Where the file is looked for, first found wins: the session's worktree, the main one. Null until the first refresh.
+  let roots: string[] | null = null
+  // What was wrong with the file when last read, to say it again only when it changes.
+  let configProblems = ''
+  // The first of them, shown in the board's status bar.
+  let configProblem: string | null = null
   let host: Host | null = null
   let cwd = ''
   let repo: string | null = null
@@ -129,7 +142,9 @@ export const register: Register = on => {
   let lastBoard: Board | null = null
   let fetchedAt = 0
   let branches: string[] = []
-  let timers: Timer[] = []
+  // The refresh from GitHub and the poll of the branches; null while the board is closed.
+  let refreshTimer: Timer | null = null
+  let pollTimer: Timer | null = null
   let isRefreshing = false
   // Why the board's Client last failed; the pane then draws the reason instead.
   let fault: string | null = null
@@ -203,8 +218,45 @@ export const register: Register = on => {
       overrides: shown,
       priorityOff: priorityOff(),
       sessions,
+      configProblem,
     })
     await to.setBoard(lastBoard)
+  }
+
+  /**
+   * `.claude/kanban.json` over the defaults (spec section 10): the file of the session's worktree,
+   * else the main worktree's (a session Orca runs in a linked worktree finds the repository's).
+   * The board skips a wrong part (its default stays) and names the first one in its status bar;
+   * a toast says so when the problems change. A new `refreshSeconds` restarts the refresh timer.
+   */
+  const loadConfig = async (to: Host) => {
+    roots ??= [...new Set([await worktreeRoot(to, cwd), await repoRoot(to, cwd)])]
+    let text: string | null = null
+    let problems: string[] = []
+    try {
+      for (const root of roots) {
+        text = await to.readText(`${root}/${CONFIG_PATH}`)
+        if (text !== null) break
+      }
+    } catch (error) {
+      problems = [`could not be read (${messageOf(error)})`]
+    }
+    const read = configOf(text)
+    problems.push(...read.problems)
+    const seconds = config.refreshSeconds
+    config = read.config
+    configProblem = problems[0] ?? null
+    if (config.refreshSeconds !== seconds && refreshTimer !== null) {
+      refreshTimer.cancel()
+      refreshTimer = to.every(config.refreshSeconds * 1000, () => void refresh(to))
+    }
+    const said = problems.join('\n')
+    if (said === configProblems) return
+    configProblems = said
+    if (problems.length === 0) return
+    for (const problem of problems) to.log(`kanban-board: ${CONFIG_PATH}: ${problem}`)
+    const more = problems.length === 1 ? '' : ` (and ${problems.length - 1} more: see the debug log)`
+    to.toast(`${CONFIG_PATH}: ${problems[0]}; the board skips it${more}`)
   }
 
   const refresh = async (to: Host) => {
@@ -212,6 +264,7 @@ export const register: Register = on => {
     isRefreshing = true
     try {
       await to.setStatus({ isLoading: true, error: null })
+      await loadConfig(to)
       repo ??= await resolveRepo(to, cwd)
       const now = await to.now()
       const started = ++refreshes
@@ -477,17 +530,17 @@ export const register: Register = on => {
 
   const start = () => {
     const to = host
-    if (to === null || timers.length > 0) return
-    timers = [
-      to.every(config.refreshSeconds * 1000, () => void refresh(to)),
-      to.every(LOCAL_POLL_MS, () => void pollLocal(to)),
-    ]
+    if (to === null || refreshTimer !== null) return
+    refreshTimer = to.every(config.refreshSeconds * 1000, () => void refresh(to))
+    pollTimer = to.every(LOCAL_POLL_MS, () => void pollLocal(to))
     void refresh(to)
   }
 
   const stop = () => {
-    for (const timer of timers) timer.cancel()
-    timers = []
+    refreshTimer?.cancel()
+    pollTimer?.cancel()
+    refreshTimer = null
+    pollTimer = null
     // The board opens again on its columns.
     if (host !== null) closeDetail(host)
   }
@@ -510,6 +563,8 @@ export const register: Register = on => {
       deleteStore: key => $.store.delete(key),
       pick: number => update($, pick, old => ({ number, seq: (old?.seq ?? 0) + 1 })),
       toast: text => $.ui.toast(text),
+      log: text => $.ui.log(text),
+      readText: async path => ((await $.fs.exists(path)) ? $.fs.read(path) : null),
     }
     await $.command.register({
       name: 'board',

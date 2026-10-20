@@ -236,6 +236,8 @@ export type BoardExtras = {
   priorityOff?: string | null
   /** The state of each issue's sessions the board started (spec section 8). */
   sessions?: ReadonlyMap<number, SessionState>
+  /** The first thing wrong with `.claude/kanban.json`; null (the default) when nothing is. */
+  configProblem?: string | null
 }
 
 /** A session that runs: it puts its card in In progress. */
@@ -297,6 +299,7 @@ export function buildBoard(
   const all: Required<BoardExtras> = {
     overrides: extras.overrides ?? new Map(),
     priorityOff: extras.priorityOff ?? null,
+    configProblem: extras.configProblem ?? null,
     sessions: extras.sessions ?? new Map(),
   }
   const parentLabelsOf = parentLabelsIn(snapshot)
@@ -330,7 +333,7 @@ export function buildBoard(
 
   containers.sort((a, b) => a.number - b.number)
   cards.sort(compareCards)
-  return { repo: snapshot.repo, cards, containers, updatedAt, priorityOff: all.priorityOff }
+  return { repo: snapshot.repo, cards, containers, updatedAt, priorityOff: all.priorityOff, configProblem: all.configProblem }
 }
 
 export type ViewOptions = { showDone: boolean; filter: number | null }

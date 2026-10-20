@@ -1,6 +1,6 @@
 # claude-kanban: design spec
 
-Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–5
+Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–6
 of the delivery plan are built (section 12 says what each stage left for later).
 
 A Claude Code mod that shows the GitHub issues of the current repository as a kanban board in a
@@ -322,6 +322,27 @@ part of it:
 }
 ```
 
+As built (stage 6):
+- The board reads the file at each refresh (every `refreshSeconds`, and `r`), so an edit takes
+  effect without a reload. It reads it from the root of the worktree the session runs in
+  (`git rev-parse --show-toplevel`), so a branch can carry its own board settings; with no file
+  there, from the main worktree's root (a session Orca runs in a linked worktree finds the
+  repository's file).
+- A part the file gives replaces the default's: a list whole (`containers`, `launch`, each
+  column's labels), an object key by key (`columns`, `branchPatterns`). The parts it leaves out
+  keep their defaults.
+- A wrong part keeps its default, and a wrong `launch` rule is left out. Wrong is: not the type
+  above, a key the board does not know, a label name that is not a non-empty string, a launch
+  rule with no `prompt` or with neither `label` nor `labelPrefix`, a branch pattern that does
+  not compile or has no group around the number, `doneDays` outside 1–365, `refreshSeconds`
+  outside 15–3600. A file that is not a JSON object gives the defaults.
+- The status bar shows the first problem (`⚠ kanban.json: <problem>`) while the file has one. A
+  toast names it too (`.claude/kanban.json: <problem>; the board skips it`) when the list of
+  problems changes, and the debug log gets each one. No file: the defaults, nothing shown.
+- A new `refreshSeconds` restarts the refresh timer at the refresh that reads it.
+- `doneDays` is how far back the Done column reaches: the issues closed in the last N days. `d`
+  shows or hides that column; it does not change what is in it.
+
 ## 11. Platform facts (Claude Code mod API)
 
 From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, which is the authority:
@@ -354,7 +375,7 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 | 3. Priority | done | Section 4: read (stage 1), field and option ids by name, `p`/`P` on the board and in the detail view, the move at once, revert with a toast, off without the field; the Priority on full cards | — |
 | 4. Starting cards | done | Section 7: `s` on the board and in the detail view, the prompts from `launch` rules, the repository root, the Orca tab, the iTerm tab, session records in `$.store`, the `started` badge | — (focus, resume and In progress came with stage 5) |
 | 5. Session tracking | done | Section 8: the reporter in the started sessions, the session badge on cards and in the detail view, a running session in In progress, `s` focusing its tab or resuming the last session | Notifications (not planned) |
-| 6. Configuration file | not started | `Config` and `DEFAULT_CONFIG` in `hooks/lib/model.ts` hold section 10's shape, `launch` included | Reading `.claude/kanban.json` and merging it over the defaults |
+| 6. Configuration file | done | Section 10: `.claude/kanban.json` read at each refresh from the worktree root, merged over the defaults part by part, wrong parts skipped and named in a toast | — |
 
 ## 13. Open checks for implementation
 

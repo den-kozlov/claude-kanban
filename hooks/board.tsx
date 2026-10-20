@@ -319,6 +319,9 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       const last = Math.min(detail.lines.length, detail.scroll + detail.rows)
       parts.push({ text: `  #${detail.number}  ${detail.scroll + 1}–${last} of ${detail.lines.length}`, tone: 'dim' })
     } else if (state.showDone) parts.push({ text: '  +done', tone: 'dim' })
+    // A board drawn by an older hooks module has no `configProblem`.
+    const configProblem = board?.configProblem ?? null
+    if (configProblem !== null) parts.push({ text: `  ⚠ kanban.json: ${truncate(configProblem, 60)}`, tone: 'pending' })
     if (props.status.error !== null) parts.push({ text: `  ⚠ ${props.status.error}`, tone: 'failure' })
     else if (props.status.isLoading) parts.push({ text: '  refreshing…', tone: 'dim' })
     else if (board != null) parts.push({ text: `  updated ${clockOf(board.updatedAt)}`, tone: 'dim' })

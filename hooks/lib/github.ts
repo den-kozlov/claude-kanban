@@ -271,6 +271,11 @@ export async function repoRoot(shell: Shell, cwd: string): Promise<string> {
   })
   const dir = common.stdout.trim()
   if (common.exitCode === 0 && dir.endsWith('/.git')) return dir.slice(0, -'/.git'.length)
+  return worktreeRoot(shell, cwd)
+}
+
+/** The folder of the worktree `cwd` is in: where `.claude/kanban.json` is read from. */
+export async function worktreeRoot(shell: Shell, cwd: string): Promise<string> {
   const top = await shell.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 10_000 })
   if (top.exitCode !== 0) throw new Error(firstLine(top.stderr) || 'not a git repository')
   return top.stdout.trim()

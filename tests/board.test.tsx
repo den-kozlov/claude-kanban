@@ -63,6 +63,10 @@ type HostOptions = {
   term?: string
   /** What the plugin's store holds at the start. */
   store?: Record<string, unknown>
+  /** Files by absolute path, `.claude/kanban.json` among them; the test may change them. */
+  files?: Map<string, string>
+  /** The worktree the session runs in; the main one, `/repo`, when left out. */
+  worktree?: string
 }
 
 /**
@@ -73,13 +77,15 @@ function fakeHost(on: On, options: HostOptions = {}) {
   const opened: string[][] = []
   const writes: Record<string, string>[] = []
   const tabs: string[][] = []
+  // How many times the board read the open issues: once per refresh.
+  const fetches = { count: 0 }
   on('process.run', (_, e) => {
     const [tool, command] = e.argv
     const answer = (stdout: string, exitCode = 0) => ({
       value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'HTTP 403', isStdoutTruncated: false, isStderrTruncated: false },
     })
     if (tool === 'gh' && command === 'repo') return answer('o/r\n')
-    if (tool === 'git' && command === 'rev-parse') return answer('/repo/.git\n')
+    if (tool === 'git' && command === 'rev-parse') return answer(e.argv.includes('--show-toplevel') ? `${options.worktree ?? '/repo'}\n` : '/repo/.git\n')
     if (tool === 'orca') {
       tabs.push([...e.argv])
       return answer(JSON.stringify({ ok: true, result: { terminal: { handle: 'term_42' } } }))
@@ -122,11 +128,12 @@ function fakeHost(on: On, options: HostOptions = {}) {
       if (query.includes('search(')) {
         return answer(JSON.stringify({ data: { search: page([issue(6, { title: 'Shipped' })]) } }))
       }
+      fetches.count += 1
       return answer(JSON.stringify({ data: { repository: { issues: page(OPEN) } } }))
     }
     return answer('')
   })
-  return { opened, writes, tabs }
+  return { opened, writes, tabs, fetches }
 }
 
 /** Stands for the engine's panes; returns what each `$.ui.open` asked and the panes open. */
@@ -170,8 +177,15 @@ async function openBoard($: Engine, on: On, options: HostOptions = {}) {
     toasts.push(e.text)
     return { value: undefined }
   })
+  const files = options.files ?? new Map<string, string>()
+  on('fs.exists', (_, e) => ({ value: files.has(e.path) }))
+  on('fs.read', (_, e) => {
+    const text = files.get(e.path)
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: text }
+  })
   const panes = fakePanes(on)
-  const { opened, writes, tabs } = fakeHost(on, options)
+  const { opened, writes, tabs, fetches } = fakeHost(on, options)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await $.command.run({
@@ -181,7 +195,7 @@ async function openBoard($: Engine, on: On, options: HostOptions = {}) {
     presentation: { isFullscreen: true, columns: 200 },
   })
   await clock.settle()
-  return { clock, panes, opened, writes, toasts, tabs, stored }
+  return { clock, panes, opened, writes, toasts, tabs, stored, fetches }
 }
 
 test('the board shows the issues in their columns and answers its keys', async ($, on) => {
@@ -516,5 +530,57 @@ test('s on a Review card resumes its last session in a new tab', async ($, on) =
   const records = stored.get('sessions:o/r') as Record<string, unknown[]>
   expect(records['4']).toEqual([{ sessionId: 'rec-4', terminal: { app: 'iterm', id: 'ITERM-1' }, startedAt: NOW }])
   expect(await board.find({ type: 'Text', text: /^ *starting$/, in: 'board' })).toBeDefined()
+  await board.unmount()
+})
+
+test('.claude/kanban.json changes the board at each refresh; a wrong part is skipped and named', async ($, on) => {
+  const path = '/repo/.claude/kanban.json'
+  const files = new Map([[path, JSON.stringify({ columns: { readyForHuman: ['human'] }, doneDays: 0 })]])
+  const { clock, toasts, fetches } = await openBoard($, on, { files })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const text = async (pattern: RegExp) => (await board.find({ type: 'Text', text: pattern, in: 'board' }))?.text
+
+  // `ready-for-human` names no column now: #1 and #2 go to Triage beside #3.
+  expect(await text(/^Triage 3$/)).toBeDefined()
+  expect(await text(/^Ready for human/)).toBeUndefined()
+  expect(toasts.at(-1)).toBe('.claude/kanban.json: doneDays must be a whole number from 1 to 365; the board skips it')
+  expect(await text(/⚠ kanban\.json: doneDays must be/)).toBeDefined()
+
+  // A file that is not JSON: the defaults, and a toast.
+  files.set(path, '{ "columns": ')
+  await board.key({ key: 'r', in: 'board' })
+  await clock.settle()
+  expect(await text(/^Ready for human 2$/)).toBeDefined()
+  expect(toasts.at(-1)).toMatch(/^\.claude\/kanban\.json: it is not JSON \(.+\); the board skips it$/)
+
+  // A new refreshSeconds takes effect at the refresh that reads it.
+  files.set(path, JSON.stringify({ refreshSeconds: 15 }))
+  await board.key({ key: 'r', in: 'board' })
+  await clock.settle()
+  const before = fetches.count
+  await clock.advance(15_000)
+  expect(fetches.count).toBe(before + 1)
+
+  // No file: the defaults, and no toast.
+  const said = toasts.length
+  files.delete(path)
+  await board.key({ key: 'r', in: 'board' })
+  await clock.settle()
+  expect(toasts.length).toBe(said)
+  expect(await text(/⚠ kanban\.json/)).toBeUndefined()
+  await board.unmount()
+})
+
+test("a session in a linked worktree with no kanban.json of its own reads the main worktree's", async ($, on) => {
+  const files = new Map([['/repo/.claude/kanban.json', JSON.stringify({ columns: { readyForHuman: ['human'] } })]])
+  const { clock } = await openBoard($, on, { files, worktree: '/worktrees/feature' })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await board.find({ type: 'Text', text: /^Triage 3$/, in: 'board' })).toBeDefined()
+  // The worktree's own file wins.
+  files.set('/worktrees/feature/.claude/kanban.json', '{}')
+  await board.key({ key: 'r', in: 'board' })
+  await clock.settle()
+  expect(await board.find({ type: 'Text', text: /^Ready for human 2$/, in: 'board' })).toBeDefined()
   await board.unmount()
 })

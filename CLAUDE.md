@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Claude Code mod (a plugin of function hooks) named `kanban-board`: a kanban board of the current
 repository's GitHub issues in a pane beside the transcript, opened and closed with `/board`. The
 design is `docs/spec.md`; its section 12 is the delivery plan and a table of what is built.
-Stages 1 (read-only board), 2 (detail view), 3 (Priority writes), 4 (starting cards) and 5
-(session tracking) are built; the config file is not.
+Stages 1 (read-only board), 2 (detail view), 3 (Priority writes), 4 (starting cards), 5
+(session tracking) and 6 (the config file) are built.
 
 The repository root is the plugin folder. The plugin name cannot start with `claude-` (the
 validator reserves it), so the repo is `claude-kanban` and the plugin `kanban-board`; the
@@ -62,6 +62,8 @@ Pure logic, shared by both and covered by the tests:
 - `hooks/lib/detail-view.ts` — the detail view's lines, cut to the cell, and its links.
 - `hooks/lib/launch.ts` — what `s` does for a card (start with which prompt, focus, resume, or
   why nothing), and the `orca` / `osascript` commands with their shell quoting.
+- `hooks/lib/config.ts` — `.claude/kanban.json` over `DEFAULT_CONFIG`, part by part, and what is
+  wrong with it. The hooks module reads the file at each refresh.
 - `hooks/lib/sessions.ts` — the session records and reports in `$.store`, and a session's state
   from them (starting, working, waiting, ended).
 

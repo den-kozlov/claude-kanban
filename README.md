@@ -50,6 +50,27 @@ field (a user account, or an organization without it), `p` and `P` are off.
 Needs `gh` signed in to GitHub. The board shares its place with Claude Code's diff panel: when you
 do not see the board, hide the diff panel with `/diff`.
 
+## Configure
+
+The defaults follow the mattpocock triage labels. `.claude/kanban.json` in the repository changes
+any part of them: the labels of each column, the container labels, the prompts `s` starts with,
+the branch patterns, how many days Done shows and how often the board refreshes. The full
+shape is in [section 10 of the spec](docs/spec.md#10-configuration). For example:
+
+```json
+{
+  "columns": { "readyForHuman": ["ready-for-human", "human"] },
+  "refreshSeconds": 120
+}
+```
+
+`doneDays` is how far back the Done column reaches (the issues closed in the last N days);
+`d` only shows or hides that column.
+
+The board reads the file at each refresh, so an edit shows after `r`. A session in a linked
+worktree with no file of its own reads the main worktree's. A part that is wrong keeps its
+default, and the status bar says what is wrong (`⚠ kanban.json: …`).
+
 ## Develop
 
 ```sh

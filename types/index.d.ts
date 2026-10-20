@@ -53,6 +53,8 @@ export type Board = {
   updatedAt: number
   /** Why `p`/`P` do nothing here (no `Priority` issue field, not read yet); null while they work. */
   priorityOff: string | null
+  /** The first thing wrong with `.claude/kanban.json` (the board skips it); null when nothing is. */
+  configProblem: string | null
 }
 
 export type BoardStatus = {
