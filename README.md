@@ -25,6 +25,7 @@ Claude Code reads the mod from that folder: after an edit, run `/reload-plugins`
 |---|---|
 | arrows / click | select a card |
 | `Enter` | open the detail popup of the card (`Esc` closes it) |
+| `s` | start the card in a new Claude session (a new Orca tab inside Orca, else an iTerm tab) |
 | `o` | open the issue in the browser |
 | `p` / `P` | next Priority (none → Urgent → High → Medium → Low → none) / clear it |
 | `r` | refresh now |

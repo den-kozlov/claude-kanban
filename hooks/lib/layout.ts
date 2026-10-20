@@ -41,6 +41,7 @@ export function fullCard(card: Card, width: number): CardLines {
     })
   }
   if (card.isSandcastle) parts.push({ text: 'sandcastle', tone: 'pending' })
+  if (card.isStarted) parts.push({ text: 'started', tone: 'pending' })
   for (const label of card.labels) parts.push({ text: label, tone: 'dim' })
   if (card.comments > 0) {
     parts.push({ text: `${card.comments} comment${card.comments === 1 ? '' : 's'}`, tone: 'dim' })

@@ -5,6 +5,7 @@ import type { Board, BoardMessage, BoardProps, BoardStatus, Detail, Priority, Pr
 import { detailOf } from './lib/detail'
 import {
   fetchIssue,
+  repoRoot,
   fetchPriorityField,
   fetchSnapshot,
   openIssue,
@@ -13,10 +14,12 @@ import {
   writePriority,
   type Shell,
 } from './lib/github'
+import { claudeCommand, itermArgv, orcaArgv, orcaHandleOf, sessionName } from './lib/launch'
 import {
   buildBoard,
   COLUMNS,
   DEFAULT_CONFIG,
+  launchIn,
   nextPriority,
   priorityOf,
   type PriorityField,
@@ -43,6 +46,7 @@ function isBoardMessage(data: unknown): data is BoardMessage {
   const message = data as { type?: unknown; number?: unknown }
   if (message.type === 'refresh') return true
   if (!Number.isInteger(message.number)) return false
+  if (message.type === 'start') return true
   if (message.type === 'priority') {
     const { action } = data as { action?: unknown }
     return action === 'cycle' || action === 'clear'
@@ -56,6 +60,15 @@ function isBoardMessage(data: unknown): data is BoardMessage {
  */
 type Override = { priority: Priority | null; readAfter: number | null }
 
+/** A session the board started (spec section 8); `terminal` is Orca's handle, null in iTerm. */
+type SessionRecord = { sessionId: string; terminal: string | null; startedAt: number }
+
+/** The records of one repository by issue number, kept in `$.store` under `sessions:<owner/repo>`. */
+type Records = Record<string, SessionRecord[]>
+
+/** The records kept per issue: the last few are enough to resume. */
+const RECORDS_PER_ISSUE = 5
+
 /** What the background work needs of the session, bound at `session.start`. */
 type Host = Shell & {
   now: () => Promise<number>
@@ -65,6 +78,8 @@ type Host = Shell & {
   setStatus: (value: BoardStatus) => Promise<unknown>
   setDetail: (value: Detail) => Promise<unknown>
   updateDetail: (fn: (value: Detail | null) => Detail | null) => Promise<unknown>
+  readStore: (key: string) => Promise<unknown>
+  writeStore: (key: string, value: unknown) => Promise<void>
   /** Asks the board to select the card. */
   pick: (number: number) => Promise<unknown>
   /** Opens the popup, or retitles it when it is open. */
@@ -78,6 +93,8 @@ export const register: Register = on => {
   let cwd = ''
   let repo: string | null = null
   let snapshot: Snapshot | null = null
+  // The board as last published: the column each card stands in.
+  let lastBoard: Board | null = null
   let fetchedAt = 0
   let branches: string[] = []
   let timers: Timer[] = []
@@ -97,6 +114,12 @@ export const register: Register = on => {
   const bursts = new Map<number, { base: Priority | null; before: Override | undefined; timer: Timer }>()
   // Grows with each refresh that starts: what an override's `readAfter` counts in.
   let refreshes = 0
+  // `TERM_PROGRAM` of this session: `Orca` starts cards in an Orca tab, anything else in iTerm.
+  let termProgram: string | undefined
+  // The sessions the board started, once read from the store; null until then.
+  let records: Records | null = null
+  // Cards being started: a second `s` before the tab opens does nothing.
+  const starting = new Set<number>()
   // The node ids of issues the popup loaded that the board does not hold (containers' parents, old issues).
   const loadedIds = new Map<number, string>()
 
@@ -107,10 +130,22 @@ export const register: Register = on => {
     return priorityError === null ? 'Priority is not read yet' : `Priority could not be read: ${priorityError}`
   }
 
+  const startedIssues = () => new Set(Object.keys(records ?? {}).map(Number))
+
+  const loadRecords = async (to: Host, at: string): Promise<Records> => {
+    const stored = await to.readStore(`sessions:${at}`)
+    return typeof stored === 'object' && stored !== null ? (stored as Records) : {}
+  }
+
   const publish = async (to: Host) => {
     if (snapshot === null) return
     const shown = new Map([...overrides].map(([number, one]) => [number, one.priority]))
-    await to.setBoard(buildBoard(snapshot, branches, config, fetchedAt, { overrides: shown, off: priorityOff() }))
+    lastBoard = buildBoard(snapshot, branches, config, fetchedAt, {
+      overrides: shown,
+      priorityOff: priorityOff(),
+      started: startedIssues(),
+    })
+    await to.setBoard(lastBoard)
   }
 
   const refresh = async (to: Host) => {
@@ -134,6 +169,7 @@ export const register: Register = on => {
                 priorityError = messageOf(error)
               },
             )
+      records ??= await loadRecords(to, at)
       const [fetched, local] = await Promise.all([
         fetchSnapshot(to, cwd, at, config.doneDays, now),
         readBranches(to, cwd),
@@ -270,6 +306,58 @@ export const register: Register = on => {
     }
   }
 
+  /**
+   * `s` (spec section 7): a new interactive Claude session for the card in
+   * the repository root, in a new Orca tab inside Orca and a new iTerm tab
+   * elsewhere, with the prompt its labels call for. The board writes nothing
+   * to GitHub; it records the session.
+   */
+  const startCard = async (to: Host, number: number) => {
+    const card = lastBoard?.cards.find(one => one.number === number)
+    if (snapshot === null || card === undefined || repo === null) {
+      to.toast(`#${number} is not a card on the board`)
+      return
+    }
+    const launch = launchIn(snapshot, number, card.column, config)
+    if ('reason' in launch) {
+      to.toast(launch.reason)
+      return
+    }
+    if (starting.has(number)) return
+    starting.add(number)
+    const at = repo
+    try {
+      const root = await repoRoot(to, cwd)
+      const sessionId = crypto.randomUUID()
+      const name = sessionName(number, card.title)
+      const command = claudeCommand(sessionId, name, launch.prompt)
+      const inOrca = termProgram === 'Orca'
+      const run = await to.run(inOrca ? orcaArgv(root, name, command) : itermArgv(root, command), {
+        cwd: root,
+        timeoutMs: 30_000,
+      })
+      if (run.exitCode !== 0) {
+        throw new Error(run.stderr.trim().split('\n')[0] || `${inOrca ? 'orca' : 'osascript'} exited with ${run.exitCode}`)
+      }
+      const record: SessionRecord = {
+        sessionId,
+        terminal: inOrca ? orcaHandleOf(run.stdout) : null,
+        startedAt: await to.now(),
+      }
+      // Read again: another board may have started a card since.
+      const kept = await loadRecords(to, at)
+      kept[String(number)] = [...(kept[String(number)] ?? []), record].slice(-RECORDS_PER_ISSUE)
+      await to.writeStore(`sessions:${at}`, kept)
+      records = kept
+      await publish(to)
+      to.toast(`Started #${number} in a new ${inOrca ? 'Orca' : 'iTerm'} tab: ${launch.prompt}`)
+    } catch (error) {
+      to.toast(`Could not start #${number}: ${messageOf(error)}`)
+    } finally {
+      starting.delete(number)
+    }
+  }
+
   const openInBrowser = (to: Host, number: number) => {
     const at = repo
     if (at !== null) void openIssue(to, cwd, at, number).catch(error => to.toast(messageOf(error)))
@@ -292,6 +380,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
+    termProgram = await $.env.get('TERM_PROGRAM').catch(() => undefined)
     host = {
       run: (argv, init) => $.process.run(argv, init),
       sleep: ms => $.clock.sleep(ms),
@@ -302,6 +391,8 @@ export const register: Register = on => {
       setStatus: value => update($, status, () => value),
       setDetail: value => update($, detail, () => value),
       updateDetail: fn => update($, detail, fn),
+      readStore: key => $.store.get(key),
+      writeStore: (key, value) => $.store.set(key, value),
       pick: number => update($, pick, old => ({ number, seq: (old?.seq ?? 0) + 1 })),
       openPopup: title => $.ui.open({ id: POPUP, title, focus: true, closeOnEscape: true }),
       toast: text => $.ui.toast(text),
@@ -343,6 +434,7 @@ export const register: Register = on => {
     if (message.type === 'open') openInBrowser(to, message.number)
     if (message.type === 'detail') void showIssue(to, message.number)
     if (message.type === 'priority') void changePriority(to, message.number, message.action, null)
+    if (message.type === 'start') void startCard(to, message.number)
     return next(e)
   })
 
@@ -386,7 +478,12 @@ export const register: Register = on => {
     const current = await read($, board)
     const card = current?.cards.find(one => one.number === shown.number)
     const column = COLUMNS.find(one => one.id === card?.column)?.title ?? null
-    const where = { columns: e.props.bodyColumns, column, priorityOff: current?.priorityOff ?? priorityOff() }
+    const where = {
+      columns: e.props.bodyColumns,
+      column,
+      priorityOff: current?.priorityOff ?? priorityOff(),
+      startOff: card === undefined ? 'only a card on the board starts' : card.noStart,
+    }
 
     return drawPopup(elements, shown, where, {
       select: number => {
@@ -396,6 +493,10 @@ export const register: Register = on => {
       open: number => {
         const to = host
         if (to !== null) openInBrowser(to, number)
+      },
+      start: number => {
+        const to = host
+        if (to !== null) void startCard(to, number)
       },
       priority: (number, action) => {
         const to = host

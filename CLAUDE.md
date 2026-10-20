@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Claude Code mod (a plugin of function hooks) named `kanban-board`: a kanban board of the current
 repository's GitHub issues in a pane beside the transcript, opened and closed with `/board`. The
 design is `docs/spec.md`; its section 12 is the delivery plan and a table of what is built.
-Stages 1 (read-only board), 2 (detail popup) and 3 (Priority writes) are built; starting cards,
-session tracking and the config file are not.
+Stages 1 (read-only board), 2 (detail popup), 3 (Priority writes) and 4 (starting cards) are
+built; session tracking and the config file are not.
 
 The repository root is the plugin folder. The plugin name cannot start with `claude-` (the
 validator reserves it), so the repo is `claude-kanban` and the plugin `kanban-board`; the
@@ -38,11 +38,12 @@ Two runtimes talk through messages:
   (`issue`): it loads the issue into the `detail` state and draws it with `hooks/popup.tsx`, plain
   elements the engine scrolls. A link there sets the `pick` state, which the board takes as its
   selection once. It writes Priority (`p`/`P` from either pane): the new value shows at once as an
-  override over GitHub's, kept until a refresh that started after the write ended.
+  override over GitHub's, kept until a refresh that started after the write ended. It starts cards
+  (`s`): a new `claude` in an Orca or iTerm tab, recorded in `$.store`.
 - `hooks/board.tsx`, the `Client`'s surface module. It runs on the drawing thread with no `$`. It owns
   what belongs to the viewer: the selection, Done shown or hidden, the container filter and each
   column's scroll window. It handles raw keys and pointer events, and posts `refresh` / `open` /
-  `detail` / `priority` to the hooks module (`ui.message`). Keys reach it only after the person clicks the board.
+  `detail` / `priority` / `start` to the hooks module (`ui.message`). Keys reach it only after the person clicks the board.
 
 Pure logic, shared by both and covered by the tests:
 
@@ -54,6 +55,8 @@ Pure logic, shared by both and covered by the tests:
 - `hooks/lib/github.ts` — the `gh api graphql` queries and Priority mutations (own pagination,
   retry with backoff for the `EOF` failures) and the git reads.
 - `hooks/lib/detail.ts` — the popup's issue from GitHub's answer; Markdown cleaned and cut.
+- `hooks/lib/launch.ts` — which prompt a card starts with (or why it does not start), and the
+  `orca` / `osascript` commands with their shell quoting.
 
 ## Platform rules that bite
 

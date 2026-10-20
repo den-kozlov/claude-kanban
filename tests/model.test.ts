@@ -198,7 +198,7 @@ describe('priority', () => {
       [],
       DEFAULT_CONFIG,
       0,
-      { overrides: new Map([[1, 'Urgent']]), off: 'o has no Priority issue field' },
+      { overrides: new Map([[1, 'Urgent']]), priorityOff: 'o has no Priority issue field' },
     )
 
     expect(board.cards.map(card => [card.number, card.priority])).toEqual([

@@ -1,6 +1,6 @@
 # claude-kanban: design spec
 
-Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–3
+Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–4
 of the delivery plan are built (section 12 says what each stage left for later).
 
 A Claude Code mod that shows the GitHub issues of the current repository as a kanban board in a
@@ -28,7 +28,7 @@ Done, Review, In progress, Blocked, then the label columns.
 | Needs info | label `needs-info` |
 | Ready for agent | label `ready-for-agent` (Sandcastle takes these) |
 | Ready for human | label `ready-for-human` |
-| In progress | a live or recorded board session for the issue, a worktree or branch matching `issue-<N>`, or a Sandcastle branch `sandcastle/issue-<N>` (badge `sandcastle`) |
+| In progress | a live or recorded board session for the issue, a worktree or branch matching `issue-<N>`, or a Sandcastle branch `sandcastle/issue-<N>` (badge `sandcastle`). Until stage 5 a recorded session moves no card (the owner's choice, 2026-10-20): the board cannot tell a live session from an ended one, and a card after `/triage` would stand in In progress for good |
 | Review | an open PR for the issue (section 6) |
 | Done | closed in the last 7 days; hidden by default, `d` toggles it |
 
@@ -50,7 +50,9 @@ A full card shows:
 - up to three labels (container and column labels excluded);
 - the comment count;
 - a session badge: working / waiting for input / ended (section 8);
-- a PR badge with its CI state, when a PR exists.
+- a PR badge with its CI state, when a PR exists;
+- `started` while the board has a recorded session for it (stage 4; stage 5 replaces it with the
+  session badge).
 
 **Order.** Within a column, by Priority (Urgent → High → Medium → Low → none), then by number
 ascending (oldest first).
@@ -173,6 +175,30 @@ worktree and no branch.
 - Blocked, Needs info, Ready for agent, Done: no start (the key does nothing; the popup shows the
   button disabled with the reason).
 
+As built (stage 4):
+- `s` on the board and `Start` (hotkey `s`) in the popup. A card that does not start says why in
+  a toast; the popup draws `Start: <reason>` in place of the button. Until stage 5, `s` on an In
+  progress or Review card does nothing but say so (the owner's choice, 2026-10-20): focusing a
+  live session and resuming the last one need session tracking.
+- The prompt comes from the `launch` rules of the config (section 10), the first that matches.
+  A Triage card no rule matches (an issue with no label) gets the rule of the triage label.
+  A parent counts while it is open (the board holds only open issues and those closed lately).
+- The repository root is the main worktree's folder (`git rev-parse --path-format=absolute
+  --git-common-dir` less `/.git`), so a board in a linked worktree starts cards in the root too.
+- The command: `claude --session-id <uuid> --name '#N <title>' '<prompt>'`, the name cut to 60
+  cells, both quoted for the shell. The UUID is `crypto.randomUUID()`.
+- Orca: `TERM_PROGRAM` read with `$.env.get` at `session.start`; `orca terminal create
+  --worktree path:<root> --title '#N <title>' --command <command> --focus --json`. The handle is
+  read from the JSON answer. A root Orca does not know as a worktree fails with Orca's reason.
+- iTerm: `osascript` with a script that opens a tab in the current window (a window when none
+  is open) and writes `cd <root> && <command>` into it; the command goes as an argument, never
+  inside the script's text.
+- The record `{sessionId, terminal, startedAt}` goes to `$.store` under `sessions:<owner/repo>`,
+  by issue number, the last five per issue. The board reads the store again before it writes, so
+  another board's records stay.
+- A toast says where the session started and with which prompt; a failure says why. A second `s`
+  while the tab opens does nothing.
+
 ## 8. Session tracking
 
 - The board records `{issue → [sessionId, terminal handle, startedAt]}` per repository.
@@ -273,28 +299,34 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 | Stage | State | Built | Left for later |
 |---|---|---|---|
 | 1. Read-only board | done | Sections 2, 3 (without the session badge), 6 and 9; keys arrows/click, `o`, `r`, `d`, `f`; Priority read and card order | The session badge (stage 5); session records in In progress (stage 5) |
-| 2. Detail popup | done | Section 5's popup: `Enter`, the fields, links that select, Markdown body, the last three comments, Open in browser (`o`), `Esc` | The Start button (stage 4) |
+| 2. Detail popup | done | Section 5's popup: `Enter`, the fields, links that select, Markdown body, the last three comments, Open in browser (`o`), `Esc`; Start (stage 4) | — |
 | 3. Priority | done | Section 4: read (stage 1), field and option ids by name, `p`/`P` on the board and in the popup, the move at once, revert with a toast, off without the field; the Priority on full cards | — |
-| 4. Starting cards | not started | — | Everything in section 7 |
+| 4. Starting cards | done | Section 7: `s` and the popup's Start, the prompts from `launch` rules, the repository root, the Orca tab, the iTerm tab, session records in `$.store`, the `started` badge | In progress and Review: focus or resume (stage 5); records moving cards to In progress (stage 5) |
 | 5. Session tracking | not started | — | Everything in section 8; badges on cards |
-| 6. Configuration file | not started | `Config` and `DEFAULT_CONFIG` in `hooks/lib/model.ts` hold section 10's shape (no `launch` yet) | Reading `.claude/kanban.json` and merging it over the defaults |
+| 6. Configuration file | not started | `Config` and `DEFAULT_CONFIG` in `hooks/lib/model.ts` hold section 10's shape, `launch` included | Reading `.claude/kanban.json` and merging it over the defaults |
 
 ## 13. Open checks for implementation
 
-Learned while building stages 1–3:
+Learned while building stages 1–4:
 - A `Client` gets keys only after the person clicks it; `Escape` gives them back.
 - The engine's diff panel (`/diff`) takes the dock: a mod pane stays open and placed but is not
   drawn while it shows.
 - The owner checked the popup by hand in a live session on 2026-10-20: it works. The board's
   selection does not depend on the board's `Client` keeping its state while the popup covers it:
   the popup's `pick` selects the issue it last showed.
-- To check by hand: the Priority writes against a real issue. The tests cover them with a fake
-  `gh`; the field read was checked live against an organization with the field, the
-  mutations only against GitHub's schema.
+- The Priority writes: the tests cover them with a fake `gh`; the field read was checked live
+  against an organization with the field. The owner checked the writes and the 2 s wait
+  in a live session on 2026-10-20: they work.
+- A mod reads `TERM_PROGRAM` through `$.env.get` (a string literal the validator lists) and its
+  own session id through `$.session.id()`.
+- `orca terminal switch --terminal <handle>` focuses an existing Orca tab by its handle.
+- `claude --help` lists `--session-id <uuid>`, `-n, --name <name>` and the positional prompt
+  together; `--resume <id>` takes a session id.
+- To check by hand: `s` in Orca and in iTerm, that the new session starts with its name and
+  prompt.
 
 Still open:
 
-- Is `$.store` shared between concurrent sessions of one plugin?
-- Does a mod see its own session id at `session.start`, and is there a hook for permission prompts?
-- The Orca command that focuses an existing terminal tab by handle.
-- `claude --session-id` together with an initial prompt and `--name` in one command.
+- Is `$.store` shared between concurrent sessions of one plugin? (Stage 4 writes it from the board
+  alone and reads it again before each write.)
+- Is there a hook for permission prompts?

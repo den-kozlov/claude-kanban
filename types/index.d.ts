@@ -25,6 +25,10 @@ export type Card = {
   parent: number | null
   pr: PrBadge | null
   isSandcastle: boolean
+  /** The board has started a session for it (spec section 7); the card stays in its column. */
+  isStarted: boolean
+  /** Why `s` does not start it (its column, no launch rule); null when it starts. */
+  noStart: string | null
 }
 
 /** An issue labelled `prd`, `ideas` or `wayfinder:map`: a filter, never a card. */
@@ -67,6 +71,7 @@ export type BoardMessage =
   | { type: 'open'; number: number }
   | { type: 'detail'; number: number }
   | { type: 'priority'; number: number; action: PriorityAction }
+  | { type: 'start'; number: number }
 
 /** `p` moves to the next Priority (none → Urgent → … → Low → none), `P` clears it. */
 export type PriorityAction = 'cycle' | 'clear'

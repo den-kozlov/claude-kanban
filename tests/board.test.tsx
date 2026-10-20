@@ -57,7 +57,7 @@ const PRIORITY_FIELD = {
   options: ['Urgent', 'High', 'Medium', 'Low'].map(name => ({ id: `O_${name}`, name })),
 }
 
-type HostOptions = { owner?: 'organization' | 'user'; failWrites?: boolean }
+type HostOptions = { owner?: 'organization' | 'user'; failWrites?: boolean; term?: string }
 
 /**
  * Stands for git and gh beneath the plugin. Returns the argv of every
@@ -66,12 +66,22 @@ type HostOptions = { owner?: 'organization' | 'user'; failWrites?: boolean }
 function fakeHost(on: On, options: HostOptions = {}) {
   const opened: string[][] = []
   const writes: Record<string, string>[] = []
+  const tabs: string[][] = []
   on('process.run', (_, e) => {
     const [tool, command] = e.argv
     const answer = (stdout: string, exitCode = 0) => ({
       value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'HTTP 403', isStdoutTruncated: false, isStderrTruncated: false },
     })
     if (tool === 'gh' && command === 'repo') return answer('o/r\n')
+    if (tool === 'git' && command === 'rev-parse') return answer('/repo/.git\n')
+    if (tool === 'orca') {
+      tabs.push([...e.argv])
+      return answer(JSON.stringify({ ok: true, result: { terminal: { handle: 'term_42' } } }))
+    }
+    if (tool === 'osascript') {
+      tabs.push([...e.argv])
+      return answer('')
+    }
     if (tool === 'gh' && command === 'issue') {
       opened.push([...e.argv])
       return answer('')
@@ -109,7 +119,7 @@ function fakeHost(on: On, options: HostOptions = {}) {
     }
     return answer('')
   })
-  return { opened, writes }
+  return { opened, writes, tabs }
 }
 
 /** Stands for the engine's panes; returns what each `$.ui.open` asked and the panes open. */
@@ -136,13 +146,21 @@ async function openBoard($: Engine, on: On, options: HostOptions = {}) {
   const clock = mock.clock(on, { now: Date.UTC(2026, 9, 20, 12) })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: { command: 'board' } }))
+  mock.env(on, options.term === undefined ? {} : { TERM_PROGRAM: options.term })
+  // The plugin's store, in memory.
+  const stored = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: stored.get(e.key) }))
+  on('store.set', (_, e) => {
+    stored.set(e.key, structuredClone(e.value))
+    return { value: undefined }
+  })
   const toasts: string[] = []
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
     return { value: undefined }
   })
   const panes = fakePanes(on)
-  const { opened, writes } = fakeHost(on, options)
+  const { opened, writes, tabs } = fakeHost(on, options)
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await $.command.run({
@@ -152,7 +170,7 @@ async function openBoard($: Engine, on: On, options: HostOptions = {}) {
     presentation: { isFullscreen: true, columns: 200 },
   })
   await clock.settle()
-  return { clock, panes, opened, writes, toasts }
+  return { clock, panes, opened, writes, toasts, tabs, stored }
 }
 
 test('the board shows the issues in their columns and answers its keys', async ($, on) => {
@@ -318,6 +336,90 @@ test('the popup cycles the Priority with p', async ($, on) => {
   expect(writes.at(-1)).toEqual({ mutation: 'set', issue: 'I_2', field: 'F_priority', option: 'O_Urgent' })
   expect(await popup.find({ type: 'Text', text: /Priority Urgent/ })).toBeDefined()
   expect(await board.find({ type: 'Text', text: /^Urgent$/, in: 'board' })).toBeDefined()
+
+  await popup.unmount()
+  await board.unmount()
+})
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+test('s starts a Triage card with /triage in a new Orca tab and records the session', async ($, on) => {
+  const { clock, tabs, toasts, stored } = await openBoard($, on, { term: 'Orca' })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await board.find({ type: 'Text', text: /s start/, in: 'board' })).toBeDefined()
+  // The first card is #3, in Triage with `needs-triage`.
+  await board.key({ key: 's', in: 'board' })
+  await clock.settle()
+
+  const argv = tabs.at(-1) ?? []
+  expect(argv.slice(0, 7)).toEqual(['orca', 'terminal', 'create', '--worktree', 'path:/repo', '--title', '#3 Triage me'])
+  expect(argv[7]).toBe('--command')
+  expect(argv.slice(9)).toEqual(['--focus', '--json'])
+  const [, sessionId, rest] = /^claude --session-id (\S+) (.*)$/.exec(argv[8] ?? '') ?? []
+  expect(sessionId).toMatch(UUID)
+  expect(rest).toBe("--name '#3 Triage me' '/triage #3'")
+
+  const records = stored.get('sessions:o/r') as Record<string, unknown[]>
+  expect(records['3']).toEqual([{ sessionId: sessionId as string, terminal: 'term_42', startedAt: Date.UTC(2026, 9, 20, 12) }])
+  expect(toasts.at(-1)).toBe('Started #3 in a new Orca tab: /triage #3')
+  // The card stays in its column, with a badge.
+  expect(await board.find({ type: 'Text', text: /started/, in: 'board' })).toBeDefined()
+  expect(await board.find({ type: 'Text', text: /^Triage 1/, in: 'board' })).toBeDefined()
+  await board.unmount()
+})
+
+test('outside Orca, s opens an iTerm tab in the repository root', async ($, on) => {
+  const { clock, tabs, toasts } = await openBoard($, on)
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // → #1, Ready for human.
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 's', in: 'board' })
+  await clock.settle()
+
+  const argv = tabs.at(-1) ?? []
+  expect(argv[0]).toBe('osascript')
+  expect(argv.at(-1)).toMatch(/^cd '\/repo' && claude --session-id \S+ --name '#1 Write the spec' 'Start implementing issue #1'$/)
+  expect(toasts.at(-1)).toBe('Started #1 in a new iTerm tab: Start implementing issue #1')
+  await board.unmount()
+})
+
+test('s on a card of a column that does not start says why and opens nothing', async ($, on) => {
+  const { clock, tabs, toasts } = await openBoard($, on, { term: 'Orca' })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // → #1 (Ready for human), → #4 (Review).
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 's', in: 'board' })
+  await clock.settle()
+
+  expect(tabs).toEqual([])
+  expect(toasts.at(-1)).toBe('Review: it has its session already')
+  await board.unmount()
+})
+
+test('the popup starts the card with s, or shows why it does not start', async ($, on) => {
+  const { clock, tabs } = await openBoard($, on, { term: 'Orca' })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const popupOf = () => $.ui.mount({ ...PANE, requestId: 'issue', props: { ...PANE.props, title: '#' }, surface: 'terminal' })
+
+  // → #1, → #4 (Review).
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'return', in: 'board' })
+  await clock.settle()
+  let popup = await popupOf()
+  expect(await popup.find({ type: 'Button', key: 'start' })).toBeUndefined()
+  expect((await popup.find({ type: 'Text', text: /^Start: / }))?.text).toBe('Start: Review: it has its session already')
+  await popup.unmount()
+
+  await board.key({ key: 'left', in: 'board' })
+  await board.key({ key: 'return', in: 'board' })
+  await clock.settle()
+  popup = await popupOf()
+  await popup.press({ key: 'start' })
+  await clock.settle()
+  expect(tabs.at(-1)?.[6]).toBe('#1 Write the spec')
 
   await popup.unmount()
   await board.unmount()

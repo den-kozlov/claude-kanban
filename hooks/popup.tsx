@@ -13,6 +13,7 @@ export type PopupActions = {
   /** Shows that issue in the popup and selects it on the board. */
   select: (number: number) => void
   open: (number: number) => void
+  start: (number: number) => void
   priority: (number: number, action: PriorityAction) => void
 }
 
@@ -26,11 +27,20 @@ export function popupTitle(number: number, title: string | null): string {
 export function drawPopup(
   elements: Elements,
   detail: Detail,
-  where: { columns: number; column: string | null; priorityOff: string | null },
+  where: { columns: number; column: string | null; priorityOff: string | null; startOff: string | null },
   actions: PopupActions,
 ) {
   const { Box, Text, Button, Markdown } = elements
   const rule = <Text dimColor>{'─'.repeat(Math.max(1, Math.min(where.columns, 80)))}</Text>
+  // Start (spec section 7): a Button where the card starts, the reason where it does not.
+  const startButton =
+    where.startOff === null ? (
+      <Button key="start" plain hotkey="s" onPress={() => actions.start(detail.number)}>
+        Start
+      </Button>
+    ) : (
+      <Text dimColor>{`Start: ${where.startOff}`}</Text>
+    )
   const openButton = (
     <Button key="open" plain hotkey="o" onPress={() => actions.open(detail.number)}>
       Open in browser
@@ -119,7 +129,8 @@ export function drawPopup(
         <Text dimColor>{`Loading #${detail.number}…`}</Text>
       )}
       <Text> </Text>
-      <Box flexDirection="row" columnGap={3}>
+      <Box flexDirection="row" columnGap={3} flexWrap="wrap">
+        {startButton}
         {openButton}
         {detail.issue !== null && detail.issue.number === detail.number && priorityButtons(detail.issue)}
         <Text dimColor>Esc closes</Text>

@@ -3,6 +3,7 @@
 // Pure: no `$`, so the tests run it directly.
 
 import type { Board, Card, CiState, ColumnId, Container, PrBadge, Priority } from '../../types'
+import { launchOf, type Launch, type LaunchRule } from './launch'
 import { oneLine } from './text'
 
 /** Titles are cut so the board stays well under a `Client`'s 100,000 characters of props. */
@@ -16,6 +17,8 @@ export type Config = {
     readyForHuman: string[]
   }
   containers: string[]
+  /** Spec section 7: the prompt a started card gets, the first matching rule's. */
+  launch: LaunchRule[]
   branchPatterns: { issue: string; fallback: string; sandcastle: string }
   doneDays: number
   refreshSeconds: number
@@ -29,6 +32,11 @@ export const DEFAULT_CONFIG: Config = {
     readyForHuman: ['ready-for-human'],
   },
   containers: ['prd', 'ideas', 'wayfinder:map'],
+  launch: [
+    { label: 'needs-triage', prompt: '/triage #{n}' },
+    { labelPrefix: 'wayfinder:', parentLabel: 'wayfinder:map', prompt: '/wayfinder #{n}' },
+    { label: 'ready-for-human', prompt: 'Start implementing issue #{n}' },
+  ],
   branchPatterns: {
     issue: 'issue-(\\d+)',
     fallback: '-(\\d+)$',
@@ -217,13 +225,26 @@ function columnOf(
 /** Priorities the board shows ahead of GitHub: the writes it has sent and not yet read back. */
 export type PriorityOverrides = ReadonlyMap<number, Priority | null>
 
+/** What the board adds to GitHub's answer beside the branches. */
+export type BoardExtras = {
+  /** Priorities the board shows ahead of GitHub. */
+  overrides?: PriorityOverrides
+  /** Why `p`/`P` do nothing; null (the default) while they work. */
+  priorityOff?: string | null
+  /** The issues with a session the board started (spec section 8). */
+  started?: ReadonlySet<number>
+}
+
 function cardOf(
   issue: RawIssue,
   column: ColumnId,
   config: Config,
-  overrides: PriorityOverrides,
+  extras: Required<BoardExtras>,
+  parentLabels: string[],
 ): Omit<Card, 'pr' | 'isSandcastle'> {
   const hidden = new Set([...config.containers, ...Object.values(config.columns).flat()])
+  const { overrides } = extras
+  const launch = launchOf(issue.number, column, labelsOf(issue), parentLabels, config)
   return {
     number: issue.number,
     title: oneLine(issue.title).slice(0, TITLE_LIMIT),
@@ -234,7 +255,22 @@ function cardOf(
     comments: issue.comments.totalCount,
     priority: overrides.has(issue.number) ? (overrides.get(issue.number) ?? null) : priorityOf(issue),
     parent: issue.parent?.number ?? null,
+    isStarted: extras.started.has(issue.number),
+    noStart: 'reason' in launch ? launch.reason : null,
   }
+}
+
+/** The labels of an issue's parent while it is open (a closed one is not in the snapshot). */
+function parentLabelsIn(snapshot: Snapshot): (issue: RawIssue) => string[] {
+  const openLabels = new Map(snapshot.open.map(issue => [issue.number, labelsOf(issue)]))
+  return issue => (issue.parent === null ? [] : (openLabels.get(issue.parent.number) ?? []))
+}
+
+/** What `s` does for the card of `number` standing in `column`: its prompt, or why it does not start. */
+export function launchIn(snapshot: Snapshot, number: number, column: ColumnId, config: Config): Launch {
+  const issue = snapshot.open.find(one => one.number === number) ?? snapshot.done.find(one => one.number === number)
+  if (issue === undefined) return { reason: `#${number} is not on the board` }
+  return launchOf(number, column, labelsOf(issue), parentLabelsIn(snapshot)(issue), config)
 }
 
 export function buildBoard(
@@ -242,9 +278,14 @@ export function buildBoard(
   branches: string[],
   config: Config,
   updatedAt: number,
-  priority: { overrides?: PriorityOverrides; off?: string | null } = {},
+  extras: BoardExtras = {},
 ): Board {
-  const overrides = priority.overrides ?? new Map()
+  const all: Required<BoardExtras> = {
+    overrides: extras.overrides ?? new Map(),
+    priorityOff: extras.priorityOff ?? null,
+    started: extras.started ?? new Set(),
+  }
+  const parentLabelsOf = parentLabelsIn(snapshot)
   const prs = prsByIssue(snapshot.prs, config)
   const inProgress = branchesByIssue(branches, config)
   const containers: Container[] = []
@@ -252,7 +293,7 @@ export function buildBoard(
 
   for (const issue of snapshot.done) {
     if (isContainer(issue, config)) continue
-    cards.push({ ...cardOf(issue, 'done', config, overrides), pr: null, isSandcastle: false })
+    cards.push({ ...cardOf(issue, 'done', config, all, parentLabelsOf(issue)), pr: null, isSandcastle: false })
   }
 
   for (const issue of snapshot.open) {
@@ -266,12 +307,16 @@ export function buildBoard(
       (linked === undefined ? null : { number: linked.number, isDraft: linked.isDraft, ci: null })
     const branch = inProgress.get(issue.number)
     const column = columnOf(issue, config, pr, branch !== undefined)
-    cards.push({ ...cardOf(issue, column, config, overrides), pr, isSandcastle: branch?.isSandcastle === true })
+    cards.push({
+      ...cardOf(issue, column, config, all, parentLabelsOf(issue)),
+      pr,
+      isSandcastle: branch?.isSandcastle === true,
+    })
   }
 
   containers.sort((a, b) => a.number - b.number)
   cards.sort(compareCards)
-  return { repo: snapshot.repo, cards, containers, updatedAt, priorityOff: priority.off ?? null }
+  return { repo: snapshot.repo, cards, containers, updatedAt, priorityOff: all.priorityOff }
 }
 
 export type ViewOptions = { showDone: boolean; filter: number | null }

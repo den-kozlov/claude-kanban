@@ -260,6 +260,22 @@ export async function writePriority(
   await graphql(shell, cwd, SET_FIELD_VALUE, { issue: issueId, field: field.fieldId, option })
 }
 
+/**
+ * The repository's root, where a started card's session runs: the main
+ * worktree's folder even from a linked worktree.
+ */
+export async function repoRoot(shell: Shell, cwd: string): Promise<string> {
+  const common = await shell.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd,
+    timeoutMs: 10_000,
+  })
+  const dir = common.stdout.trim()
+  if (common.exitCode === 0 && dir.endsWith('/.git')) return dir.slice(0, -'/.git'.length)
+  const top = await shell.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 10_000 })
+  if (top.exitCode !== 0) throw new Error(firstLine(top.stderr) || 'not a git repository')
+  return top.stdout.trim()
+}
+
 /** Opens the issue in the browser. */
 export async function openIssue(shell: Shell, cwd: string, repo: string, number: number): Promise<void> {
   const run = await shell.run(['gh', 'issue', 'view', String(number), '--web', '-R', repo], { cwd })

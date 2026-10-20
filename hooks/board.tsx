@@ -143,6 +143,10 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       case 'o':
         if (computed.selected !== null) post({ type: 'open', number: computed.selected })
         return
+      case 's':
+        // The hooks module starts it, or says in a toast why it does not.
+        if (computed.selected !== null) post({ type: 'start', number: computed.selected })
+        return
       case 'p':
       case 'P':
         // The hooks module writes it, or says in a toast why it cannot.
@@ -193,7 +197,7 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
 
     const priorityHint = board?.priorityOff === null ? '  p/P priority' : ''
     const hints = props.isFocused
-      ? `←↑↓→ ⏎ details  o open${priorityHint}  r refresh  d done  f filter`
+      ? `←↑↓→ ⏎ details  s start  o open${priorityHint}  r refresh  d done  f filter`
       : 'click the board for keys'
     const left = parts.reduce((sum, part) => sum + cellWidth(part.text), 0)
     const room = size.columns - left - 2
