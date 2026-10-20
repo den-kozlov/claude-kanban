@@ -7,6 +7,16 @@ iTerm tab) with the prompt its labels call for: `/triage`, `/wayfinder` or an im
 
 Design: [docs/spec.md](docs/spec.md).
 
+## Install
+
+From a clone of this repository, in the user scope (every session, every repository):
+
+```sh
+claude plugin install kanban-board --marketplace ~/projects/claude-kanban
+```
+
+Claude Code reads the mod from that folder: after an edit, run `/reload-plugins` in an open session.
+
 ## Use
 
 `/board` opens the board beside the transcript, and closes it. Click the board to give it the keys:

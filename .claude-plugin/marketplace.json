@@ -1,0 +1,13 @@
+{
+  "name": "claude-kanban",
+  "description": "The kanban board mod for Claude Code",
+  "owner": {
+    "name": "Blindfold"
+  },
+  "plugins": [
+    {
+      "name": "kanban-board",
+      "source": "./"
+    }
+  ]
+}
