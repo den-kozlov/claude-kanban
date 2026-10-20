@@ -1,7 +1,8 @@
 // The board's surface module: drawn in the pane's `Client`, on the drawing
 // thread, with no `$`. It owns what is the viewer's alone (the selection,
 // Done shown or hidden, the container filter, each column's window) and
-// posts what needs the hooks module (refresh, open in the browser).
+// posts what needs the hooks module (refresh, open in the browser, the
+// detail popup).
 
 import type { ClientKeyEvent, ClientModule, ClientSurface } from 'claude-code'
 
@@ -32,9 +33,11 @@ type BoardState = {
   /** The highlighted row of the open filter picker; null while it is closed. */
   picker: number | null
   scroll: Record<string, number>
+  /** The `seq` of the last `pick` from the hooks module the board has taken. */
+  pickSeen: number | null
 }
 
-const INITIAL: BoardState = { selected: null, showDone: false, filter: null, picker: null, scroll: {} }
+const INITIAL: BoardState = { selected: null, showDone: false, filter: null, picker: null, scroll: {}, pickSeen: null }
 
 const COLOR: Record<Tone, string | undefined> = {
   plain: undefined,
@@ -58,7 +61,10 @@ function compute(props: BoardProps, state: BoardState, size: { columns: number; 
   const filter = props.board.containers.some(one => one.number === state.filter) ? state.filter : null
   const view = viewColumns(props.board, { showDone: state.showDone, filter })
   const order = view.map(column => column.cards.map(card => card.number))
-  const selected = resolveSelection(order, state.selected)
+  // A pick not yet taken wins over the selection, when the card is in view.
+  const picked = props.pick !== null && props.pick.seq !== state.pickSeen ? props.pick.number : null
+  const isShown = picked !== null && order.some(column => column.includes(picked))
+  const selected = resolveSelection(order, isShown ? picked : state.selected)
   return { filter, selected, layout: layoutBoard(view, size, selected, state.scroll) }
 }
 
@@ -90,10 +96,16 @@ function clockOf(time: number): string {
 
 const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const state = surface.state ?? INITIAL
+  const stored = surface.state ?? INITIAL
   const size = sizeOf(props, surface)
-  const computed = compute(props, state, size)
+  const computed = compute(props, stored, size)
   const post = (message: BoardMessage) => surface.post(message)
+  // What every input starts from: the selection on screen, the pick taken.
+  const state: BoardState = {
+    ...stored,
+    selected: computed?.selected ?? stored.selected,
+    pickSeen: props.pick?.seq ?? null,
+  }
 
   const select = (selected: number | null) => {
     const next = { ...state, selected }
@@ -122,6 +134,12 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       return
     }
     switch (event.key) {
+      case 'return':
+        if (computed.selected !== null) {
+          surface.setState(state)
+          post({ type: 'detail', number: computed.selected })
+        }
+        return
       case 'o':
         if (computed.selected !== null) post({ type: 'open', number: computed.selected })
         return
@@ -165,7 +183,7 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
     else if (props.status.isLoading) parts.push({ text: '  refreshing…', tone: 'dim' })
     else if (board != null) parts.push({ text: `  updated ${clockOf(board.updatedAt)}`, tone: 'dim' })
 
-    const hints = props.isFocused ? '←↑↓→ o open  r refresh  d done  f filter' : 'click the board for keys'
+    const hints = props.isFocused ? '←↑↓→ ⏎ details  o open  r refresh  d done  f filter' : 'click the board for keys'
     const left = parts.reduce((sum, part) => sum + cellWidth(part.text), 0)
     const room = size.columns - left - 2
     return (

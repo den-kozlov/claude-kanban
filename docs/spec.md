@@ -1,6 +1,7 @@
 # claude-kanban: design spec
 
-Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31).
+Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1 and 2
+of the delivery plan are built (section 12 says what each stage left for later).
 
 A Claude Code mod that shows the GitHub issues of the current repository as a kanban board in a
 pane beside the transcript, and starts an issue in a parallel interactive Claude session. It is
@@ -96,9 +97,19 @@ High, Medium, Low), not a label and not a Projects v2 field.
 assignees, blockers and parent (each a link that selects that issue), the body as Markdown, the
 last three comments, and buttons Start (`s`), Open in browser (`o`), Priority (`p`).
 
+As built (stage 2): the popup is the pane `issue`, opened with `focus` and `closeOnEscape`, so it
+shows as a tab over the board. Its tree is plain elements (`Markdown` for the body and comments,
+a `Button` per link), so the engine scrolls it and `o` presses its button while the popup holds
+the keys. A link loads that issue into the same popup, retitles the tab and asks the board to
+select the card (the `pick` state; the board takes it when the card is in view). The body is cut
+at 20,000 characters and each comment at 4,000 (a code fence the cut leaves open is closed), so
+the popup stays under a drawing's 100,000 characters. `/board` closing the board closes the popup
+too. Start and Priority come with stages 4 and 3.
+
 ## 6. Data and refresh
 
-- GitHub: every 60 seconds and on `r`. Local session state: every 2–3 seconds.
+- GitHub: every 60 seconds and on `r`. Local state: every 2–3 seconds (built: branches and
+  worktrees every 3 s; session records wait for stage 5).
 - `gh` runs through `$.process.run` (no shell; 30 s default timeout). `gh api graphql` fails now and
   then with `Post https://api.github.com/graphql: EOF`: retry with backoff, keep the last good data
   on screen.
@@ -153,7 +164,8 @@ worktree and no branch.
 ## 9. Issue query
 
 `gh api graphql --paginate -F owner=<o> -F name=<r> -F query=@issues.graphql` (the variable must
-be named `$endCursor` for `--paginate`):
+be named `$endCursor` for `--paginate`). As built, the board passes the query inline
+(`-f query=…`) and follows `pageInfo` itself, at most 20 pages, so each page gets the `EOF` retry:
 
 ```graphql
 query($owner:String!,$name:String!,$endCursor:String){
@@ -181,7 +193,9 @@ query($owner:String!,$name:String!,$endCursor:String){
 
 Count open blockers from `blockedBy.nodes` where `state == OPEN` (the meaning of
 `issueDependenciesSummary.blockedBy` is unconfirmed). The body and comments of the popup come from
-a separate query when the popup opens.
+a separate query when the popup opens (built: `repository.issue(number:)` with `body`, `url`,
+`state`, `assignees`, `blockedBy{number title state}`, `parent{number title state}`,
+`issueFieldValues` and `comments(last:3)`; `number` goes as `-F` so it is an `Int!`).
 
 ## 10. Configuration
 
@@ -233,7 +247,26 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 5. Session tracking: the reporter in parallel sessions, badges, focus/resume.
 6. Configuration file.
 
+| Stage | State | Built | Left for later |
+|---|---|---|---|
+| 1. Read-only board | done | Sections 2, 3 (without the session badge), 6 and 9; keys arrows/click, `o`, `r`, `d`, `f`; Priority read and card order | The session badge (stage 5); session records in In progress (stage 5) |
+| 2. Detail popup | done | Section 5's popup: `Enter`, the fields, links that select, Markdown body, the last three comments, Open in browser (`o`), `Esc` | The Start button (stage 4) and the Priority button (stage 3) |
+| 3. Priority | partly | Read: `issueFieldValues` by field name, card order (stage 1) | Field and option ids from `organization.issueFields`; `p`/`P` writes, optimistic move, revert with a toast; `p`/`P` off without the field |
+| 4. Starting cards | not started | — | Everything in section 7 |
+| 5. Session tracking | not started | — | Everything in section 8; badges on cards |
+| 6. Configuration file | not started | `Config` and `DEFAULT_CONFIG` in `hooks/lib/model.ts` hold section 10's shape (no `launch` yet) | Reading `.claude/kanban.json` and merging it over the defaults |
+
 ## 13. Open checks for implementation
+
+Learned while building stages 1 and 2:
+- A `Client` gets keys only after the person clicks it; `Escape` gives them back.
+- The engine's diff panel (`/diff`) takes the dock: a mod pane stays open and placed but is not
+  drawn while it shows.
+- The owner checked the popup by hand in a live session on 2026-10-20: it works. The board's
+  selection does not depend on the board's `Client` keeping its state while the popup covers it:
+  the popup's `pick` selects the issue it last showed.
+
+Still open:
 
 - Is `$.store` shared between concurrent sessions of one plugin?
 - Does a mod see its own session id at `session.start`, and is there a hook for permission prompts?

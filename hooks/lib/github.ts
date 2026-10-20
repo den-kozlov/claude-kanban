@@ -3,6 +3,7 @@
 
 import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
 
+import type { RawIssueDetail } from './detail'
 import type { RawIssue, RawPr, Snapshot } from './model'
 
 const ISSUE_FIELDS = `
@@ -45,6 +46,24 @@ const DONE_ISSUES = `query($q:String!,$endCursor:String){
   }
 }`
 
+// The detail popup's issue (spec section 5), in any state.
+const ISSUE_DETAIL = `query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    issue(number:$number){
+      number title url state body
+      labels(first:20){nodes{name}}
+      assignees(first:10){nodes{login}}
+      blockedBy(first:20){nodes{number title state}}
+      parent{number title state}
+      issueFieldValues(first:10){nodes{
+        __typename
+        ... on IssueFieldSingleSelectValue{ name field{ ... on IssueFieldSingleSelect{ name } } }
+      }}
+      comments(last:3){totalCount nodes{ author{login} createdAt body }}
+    }
+  }
+}`
+
 /** What the reads need of the host: `$.process.run` and `$.clock.sleep`, wrapped by the hooks module. */
 export type Shell = {
   run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
@@ -65,10 +84,13 @@ async function graphql(
   shell: Shell,
   cwd: string,
   query: string,
-  variables: Record<string, string>,
+  variables: Record<string, string | number>,
 ): Promise<unknown> {
   const argv = ['gh', 'api', 'graphql', '-f', `query=${query}`]
-  for (const [name, value] of Object.entries(variables)) argv.push('-f', `${name}=${value}`)
+  // `-F` sends a number as a number (an `Int!`), `-f` a string as it is.
+  for (const [name, value] of Object.entries(variables)) {
+    argv.push(typeof value === 'number' ? '-F' : '-f', `${name}=${value}`)
+  }
 
   let failure = ''
   for (let attempt = 0; attempt <= RETRIES.length; attempt += 1) {
@@ -177,6 +199,16 @@ export async function readBranches(shell: Shell, cwd: string): Promise<string[]>
     if (remote !== undefined && remote !== 'HEAD') names.add(remote)
   }
   return [...names].sort()
+}
+
+/** One issue with its body and its last comments, for the detail popup. */
+export async function fetchIssue(shell: Shell, cwd: string, repo: string, number: number): Promise<RawIssueDetail> {
+  const [owner = '', name = ''] = repo.split('/')
+  const data = (await graphql(shell, cwd, ISSUE_DETAIL, { owner, name, number })) as {
+    repository: { issue: RawIssueDetail | null }
+  }
+  if (data.repository.issue === null) throw new Error(`#${number} is not an issue of ${repo}`)
+  return data.repository.issue
 }
 
 /** Opens the issue in the browser. */

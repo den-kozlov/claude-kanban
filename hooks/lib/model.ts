@@ -89,7 +89,7 @@ export type Snapshot = {
 
 const labelsOf = (issue: RawIssue) => issue.labels.nodes.map(label => label.name)
 
-export function priorityOf(issue: RawIssue): Priority | null {
+export function priorityOf(issue: Pick<RawIssue, 'issueFieldValues'>): Priority | null {
   for (const value of issue.issueFieldValues?.nodes ?? []) {
     if (value.field?.name !== 'Priority') continue
     const name = PRIORITIES.find(one => one === value.name)
