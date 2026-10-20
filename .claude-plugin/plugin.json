@@ -1,0 +1,9 @@
+{
+  "name": "kanban-board",
+  "version": "0.1.0",
+  "description": "A kanban board of the current repository's GitHub issues in a pane beside the transcript",
+  "author": {
+    "name": "Blindfold"
+  },
+  "types": "./types/index.d.ts"
+}
