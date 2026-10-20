@@ -21,8 +21,11 @@ export type PrBadge = { number: number; isDraft: boolean; ci: CiState | null }
  */
 export type SessionState = 'starting' | 'working' | 'waiting' | 'ended'
 
-/** What `s` does for a card: start a new session, focus the running one's tab, or resume the last one. */
+/** What `s` does for a card: start a session, focus the running one's tab, or resume the last one. */
 export type StartAction = 'start' | 'focus' | 'resume'
+
+/** Where a card starts: `s` in the session the board runs in, `S` in a new one (spec section 7). */
+export type StartWhere = 'here' | 'new'
 
 export type Card = {
   number: number
@@ -76,6 +79,8 @@ export type BoardProps = {
   pick: SelectRequest | null
   /** The issue the detail view shows; null while the board shows its columns. */
   detail: Detail | null
+  /** `s` starts a card in the session the board runs in: true in the pane, false in the terminal board. */
+  startsHere: boolean
   columns: number
   rows: number
 }
@@ -90,7 +95,8 @@ export type BoardMessage =
   | { type: 'back' }
   /** `current`: the Priority the board shows for it, for an issue the board does not hold. */
   | { type: 'priority'; number: number; action: PriorityAction; current: Priority | null }
-  | { type: 'start'; number: number }
+  /** `where` is absent from a board older than it: a new session. */
+  | { type: 'start'; number: number; where?: StartWhere }
 
 /** `p` moves to the next Priority (none → Urgent → … → Low → none), `P` clears it. */
 export type PriorityAction = 'cycle' | 'clear'
@@ -134,6 +140,8 @@ declare module 'claude-code' {
       status: BoardStatus
       pick: SelectRequest | null
       detail: Detail | null
+      /** The record ids this session reports its state under, besides `KANBAN_BOARD_SESSION`: the cards `s` started in it. */
+      here: string[]
     }
   }
 }

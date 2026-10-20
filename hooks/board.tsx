@@ -8,7 +8,7 @@
 
 import type { ClientKeyEvent, ClientModule, ClientSurface } from 'claude-code'
 
-import type { BoardMessage, BoardProps, Card } from '../types'
+import type { BoardMessage, BoardProps, Card, StartWhere } from '../types'
 import { clampScroll, detailLines, placeOf, scrollTo, START_LABEL, walk, type DetailLine } from './lib/detail-view'
 import {
   GUTTER,
@@ -67,6 +67,9 @@ const COLOR: Record<Tone, string | undefined> = {
 }
 
 const ARROWS = new Set(['up', 'down', 'left', 'right'])
+
+/** `s` starts a card in the session the board runs in, `S` in a new one (spec section 7). */
+const whereOf = (event: ClientKeyEvent): StartWhere => (event.key === 'S' || event.shift === true ? 'new' : 'here')
 
 function sizeOf(props: BoardProps, surface: ClientSurface<BoardState>) {
   return {
@@ -167,6 +170,8 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
     switch (event.key) {
       case 'backspace':
       case 'delete':
+      // Escape reaches only the terminal board (tui/): the engine keeps it.
+      case 'escape':
         post({ type: 'back' })
         return
       case 'up':
@@ -212,7 +217,8 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
         post({ type: 'open', number: view.number })
         return
       case 's':
-        post({ type: 'start', number: view.number })
+      case 'S':
+        post({ type: 'start', number: view.number, where: whereOf(event) })
         return
       case 'p':
       case 'P': {
@@ -235,7 +241,7 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       const rows = pickerRows(props)
       if (event.key === 'up') surface.setState({ ...state, picker: Math.max(0, state.picker - 1) })
       if (event.key === 'down') surface.setState({ ...state, picker: Math.min(rows.length - 1, state.picker + 1) })
-      if (event.key === 'f') surface.setState({ ...state, picker: null })
+      if (event.key === 'f' || event.key === 'escape') surface.setState({ ...state, picker: null })
       if (event.key === 'return') {
         const filter = rows[state.picker]?.filter ?? null
         surface.setState({ ...state, picker: null, filter, scroll: {} })
@@ -261,8 +267,9 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
         if (computed.selected !== null) post({ type: 'open', number: computed.selected })
         return
       case 's':
+      case 'S':
         // The hooks module starts it, or says in a toast why it does not.
-        if (computed.selected !== null) post({ type: 'start', number: computed.selected })
+        if (computed.selected !== null) post({ type: 'start', number: computed.selected, where: whereOf(event) })
         return
       case 'p':
       case 'P':
@@ -328,9 +335,12 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
 
     const priorityHint = board?.priorityOff === null ? '  p/P priority' : ''
     const startAs = detail === null ? null : placeOf(board ?? null, detail.number).startAs
-    const detailHints = `⌫ back  ↑↓ links, scroll  ⏎ show it${startAs === null ? '' : `  s ${START_LABEL[startAs]}`}  o open${priorityHint}`
+    // Absent in the props of a hooks module older than this surface module.
+    const newTab = (props.startsHere ?? false) ? '  S new tab' : ''
+    const startHint = startAs === null ? '' : `  s ${START_LABEL[startAs]}${startAs === 'start' ? newTab : ''}`
+    const detailHints = `⌫ back  ↑↓ links, scroll  ⏎ show it${startHint}  o open${priorityHint}`
     // The board cannot tell whether a click gave it the keys (the pane's focus is another thing): it names them always.
-    const hints = detail !== null ? detailHints : `←↑↓→ ⏎ details  s start  o open${priorityHint}  r refresh  d done  f filter`
+    const hints = detail !== null ? detailHints : `←↑↓→ ⏎ details  s start${newTab}  o open${priorityHint}  r refresh  d done  f filter`
     const left = parts.reduce((sum, part) => sum + cellWidth(part.text), 0)
     const room = size.columns - left - 2
     return (

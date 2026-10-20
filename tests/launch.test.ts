@@ -9,6 +9,7 @@ import {
   resumeCommand,
   sessionName,
   shellQuote,
+  slashOf,
 } from '../hooks/lib/launch'
 import { DEFAULT_CONFIG } from '../hooks/lib/model'
 import type { SessionState } from '../types'
@@ -75,4 +76,10 @@ describe('launch', () => {
     expect(orcaHandleOf('{"ok":true,"result":{"terminal":{"handle": "term_1"}}}')).toBe('term_1')
     expect(orcaHandleOf('{}')).toBeNull()
   })
+})
+
+test('a prompt that starts with a slash is a command and its arguments; any other is a prompt', async () => {
+  expect(slashOf('/triage #3')).toEqual({ command: 'triage', args: '#3' })
+  expect(slashOf('/wayfinder')).toEqual({ command: 'wayfinder', args: '' })
+  expect(slashOf('Start implementing issue #3')).toBeNull()
 })

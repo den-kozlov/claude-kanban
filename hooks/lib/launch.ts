@@ -66,6 +66,15 @@ export function launchOf(
   return { kind: 'start', prompt: rule.prompt.replaceAll('#{n}', `#${number}`) }
 }
 
+/**
+ * The slash command a prompt runs (`/triage #3`: `triage`, `#3`); null for a
+ * prompt to the model. A mod runs a command with `$.command.run`, never as a prompt.
+ */
+export function slashOf(prompt: string): { command: string; args: string } | null {
+  const match = /^\/(\S+)\s*([\s\S]*)$/.exec(prompt.trim())
+  return match === null ? null : { command: match[1] as string, args: (match[2] as string).trim() }
+}
+
 /** `text` as one word for a POSIX shell: in single quotes, each `'` closed, escaped and reopened. */
 export function shellQuote(text: string): string {
   return `'${text.replaceAll("'", `'\\''`)}'`

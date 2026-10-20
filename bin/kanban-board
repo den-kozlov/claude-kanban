@@ -1,0 +1,14 @@
+#!/bin/sh
+# The terminal board: kanban-board [folder of the repository]
+#
+# Bun compiles the board's JSX with the tsconfig.json of the folder it runs
+# in, so the board runs in the plugin's folder and gets the repository's
+# folder as an argument.
+set -e
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+root=$(cd "$(dirname "$self")/.." && pwd)
+case "${1:-}" in
+  -*) cd "$root" && exec bun tui/main.ts "$@" ;;
+esac
+folder=$(cd "${1:-.}" && pwd)
+cd "$root" && exec bun tui/main.ts "$folder"

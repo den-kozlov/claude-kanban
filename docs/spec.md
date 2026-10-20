@@ -1,10 +1,11 @@
 # claude-kanban: design spec
 
-Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–6
+Status: agreed with the owner on 2026-10-20 (grilling session, questions Q1–Q31). Stages 1–8
 of the delivery plan are built (section 12 says what each stage left for later).
 
 A Claude Code mod that shows the GitHub issues of the current repository as a kanban board in a
-pane beside the transcript, and starts an issue in a parallel interactive Claude session. It is
+pane beside the transcript, and starts an issue in the current Claude session or in a parallel
+interactive one. It is
 built to work with the mattpocock skills (`/triage`, `/wayfinder`, the triage label vocabulary)
 and with Sandcastle, which takes `ready-for-agent` issues on its own.
 
@@ -110,7 +111,8 @@ As built (stage 3):
 |---|---|
 | arrows / mouse click | select a card |
 | `Enter` | open the detail view of the card |
-| `s` | start the card (section 7) |
+| `s` | start the card in the current session (section 7) |
+| `S` | start the card in a new session (section 7) |
 | `o` | open the issue in the browser |
 | `p` / `P` | cycle / clear Priority |
 | `f` | choose a container filter |
@@ -119,7 +121,7 @@ As built (stage 3):
 
 **Detail view** (drawn in the board's pane in place of the columns, `Backspace` goes back):
 title, labels, Priority, assignees, parent and blockers (each a link that shows that issue), the
-body, the last three comments; `s` starts, `o` opens in the browser, `p`/`P` set the Priority.
+body, the last three comments; `s`/`S` start, `o` opens in the browser, `p`/`P` set the Priority.
 
 | Key in the detail view | Action |
 |---|---|
@@ -128,7 +130,7 @@ body, the last three comments; `s` starts, `o` opens in the browser, `p`/`P` set
 | `PgUp` / `PgDn` / `Space`, `Home` / `End` | scroll |
 | `←` / `→`, `Tab` | the next link, wherever it is |
 | `Enter`, mouse click on a link | show that issue |
-| `s`, `o`, `p` / `P`, `r` | as on the board, for the issue shown |
+| `s` / `S`, `o`, `p` / `P`, `r` | as on the board, for the issue shown |
 
 As built (stage 2, reworked after stage 5): stage 2 drew the issue in a second pane (`issue`,
 opened with `focus` and `closeOnEscape`). The owner found that after `Esc` the board took no keys
@@ -166,7 +168,10 @@ prompt. So the board's `Client` draws the view itself, and `Backspace` closes it
 
 ## 7. Starting a card
 
-`s` (on the board or in the detail view) opens a new interactive Claude session for the issue, visible at once.
+`s` (on the board or in the detail view) starts the issue in the session the board runs in: its
+prompt runs there as if the person typed it. `S` (Shift-s) opens a new interactive Claude session
+for the issue, visible at once; the steps below (Where, How) are for it.
+The terminal board (stage 7) runs in no session: there `s` starts a new session, as `S` does.
 The board never writes to GitHub when it starts a card; the skills do what they need (assignees,
 comments, labels).
 
@@ -229,6 +234,21 @@ As built (stage 5):
 - The detail view's hints say what `s` does: start, focus session or resume session; its
   header line names the session's state.
 
+As built (stage 8, `s` here and `S` in a new tab; the owner's choice, 2026-10-20):
+- `s` on a card of a label column runs its prompt in the board's session, as the person's own:
+  a prompt that starts with `/` (`/triage #3`) as that slash command through `$.command.run`
+  (the engine refuses a slash prompt through `$.prompt.submit`), any other through
+  `$.prompt.submit` with `asUser`. The engine runs it once the session is idle, after a running
+  turn. Where the session drops it, a toast says why.
+- The board records it like a new tab's session, under a new record id with no terminal, and the
+  session reports under that id (section 8): the card goes to In progress.
+- `S` on such a card does what `s` did before: a new session in a new tab.
+- On a card with a session, `s` and `S` do the same: focus a running session's tab, or resume the
+  last one in a new tab. A running session that is the board's own (started with `s`) has no tab
+  to bring forward: a toast says `#N runs in this session`.
+- The hints read `s start  S new tab`; the terminal board, whose `s` starts a new session too,
+  reads `s start`.
+
 ## 8. Session tracking
 
 - The board records `{issue → [sessionId, terminal handle, startedAt]}` per repository.
@@ -260,6 +280,13 @@ As built (stage 5):
 - A card shows the state of the session that needs the person first: waiting, working,
   starting, ended. A running one puts the card in In progress (section 2).
 - A record that falls off the last five of its issue takes its report along.
+
+As built (stage 8):
+- A session in which `s` started cards reports under each of their record ids, besides its own
+  `KANBAN_BOARD_SESSION`. The ids live in the session's `$.state` (`here`), so a reload keeps
+  them. Every id gets the same state: the session works on all its cards at once.
+- The session follows its main loop's turns always (working, or not), so a card `s` starts in
+  the middle of a turn reports `working` from the start.
 
 ## 9. Issue query
 
@@ -367,6 +394,8 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 4. Starting cards: prompts, Orca tab, iTerm fallback, session records.
 5. Session tracking: the reporter in parallel sessions, badges, focus/resume.
 6. Configuration file.
+7. Terminal board: the same board outside Claude Code.
+8. Start here: `s` starts a card in the current session, `S` in a new one.
 
 | Stage | State | Built | Left for later |
 |---|---|---|---|
@@ -376,6 +405,8 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 | 4. Starting cards | done | Section 7: `s` on the board and in the detail view, the prompts from `launch` rules, the repository root, the Orca tab, the iTerm tab, session records in `$.store`, the `started` badge | — (focus, resume and In progress came with stage 5) |
 | 5. Session tracking | done | Section 8: the reporter in the started sessions, the session badge on cards and in the detail view, a running session in In progress, `s` focusing its tab or resuming the last session | Notifications (not planned) |
 | 6. Configuration file | done | Section 10: `.claude/kanban.json` read at each refresh from the worktree root, merged over the defaults part by part, wrong parts skipped and named in a toast | — |
+| 7. Terminal board | done | `bin/kanban-board [folder]` on Bun: the pane's surface module and background work (moved to `hooks/lib/controller.ts`) in a full-screen terminal; keys without a click, `Esc` back, `q` quits, mouse clicks and wheel, toasts in the bottom line; the mod's store file shared with the pane | A Node build without Bun (not planned) |
+| 8. Start here | done | Section 7: `s` runs the card's prompt in the board's session (a slash command with `$.command.run`, other text with `$.prompt.submit`), recorded and reported (section 8); `S` starts it in a new tab; the same focus and resume for both; the hints | — |
 
 ## 13. Open checks for implementation
 
@@ -405,9 +436,16 @@ Learned while building stages 1–4:
 
 To check by hand (stage 5):
 
-- In Orca: `s` on a Triage card. The card goes to In progress with `starting`, then `working`,
+- In Orca: `S` (`s` before stage 8) on a Triage card. The card goes to In progress with `starting`, then `working`,
   then `waiting for input` when the turn ends; a permission prompt in that session shows
   `waiting for input` too. `s` on it again brings its tab forward.
 - Exit the session (`/exit`): the card shows `ended` and goes back to its label column.
 - On an In progress or Review card with an ended session: `s` resumes it in a new tab.
 - The same in iTerm, focus included.
+
+To check by hand (stage 8):
+
+- `s` on a Triage card: `/triage #N` runs in the board's session as if typed; the card goes to
+  In progress with `working`, then `waiting for input`. `s` on it again says it runs here.
+- `s` on a Ready for human card: `Start implementing issue #N` goes in as the person's prompt.
+- `S` on a Triage card: a new tab, as in stage 5.
