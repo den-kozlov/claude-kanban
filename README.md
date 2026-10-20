@@ -9,13 +9,23 @@ Design: [docs/spec.md](docs/spec.md).
 
 ## Install
 
-From a clone of this repository, in the user scope (every session, every repository):
+From GitHub, in the user scope (every session, every repository):
+
+```sh
+claude plugin install kanban-board --marketplace den-kozlov/claude-kanban
+```
+
+The board needs `gh` signed in to GitHub. `s` starts sessions in Orca or iTerm, so it needs macOS
+with one of them.
+
+To work on the mod, install it from a clone instead:
 
 ```sh
 claude plugin install kanban-board --marketplace ~/projects/claude-kanban
 ```
 
-Claude Code reads the mod from that folder: after an edit, run `/reload-plugins` in an open session.
+Claude Code then reads the mod from that folder: after an edit, run `/reload-plugins` in an open
+session.
 
 ## Use
 
@@ -47,8 +57,8 @@ Priority is the organization's `Priority` issue field. The card moves with each 
 writes the value 2 seconds after the last press. Where the repository's owner has no such
 field (a user account, or an organization without it), `p` and `P` are off.
 
-Needs `gh` signed in to GitHub. The board shares its place with Claude Code's diff panel: when you
-do not see the board, hide the diff panel with `/diff`.
+The board shares its place with Claude Code's diff panel: when you do not see the board, hide
+the diff panel with `/diff`.
 
 ## Configure
 
