@@ -123,8 +123,8 @@ export type Here = {
 
 /** The board's background work; `attach` gives it the runtime to work through. */
 export type Controller = {
-  /** The runtime, the folder the board is for and the terminal it runs in (`TERM_PROGRAM`). */
-  attach: (host: Host, cwd: string, termProgram: string | undefined) => void
+  /** The runtime, the folder the board is for and whether it runs inside Orca (`isInOrca`). */
+  attach: (host: Host, cwd: string, inOrca: boolean) => void
   /** Starts the refresh and the poll, and refreshes now; nothing while they run. */
   start: () => void
   /** Stops them; the board opens again on its columns. */
@@ -172,8 +172,8 @@ export function createController(): Controller {
   >()
   // Grows with each refresh that starts: what an override's `readAfter` counts in.
   let refreshes = 0
-  // `TERM_PROGRAM` of this session: `Orca` starts cards in an Orca tab, anything else in iTerm.
-  let termProgram: string | undefined
+  // Whether this session runs inside Orca: it starts cards in an Orca tab, else in iTerm.
+  let isOrca = false
   // The sessions the board started, read from the store at each refresh; null until the first.
   let records: Records | null = null
   // The last report of each of those sessions, by record id: read with the branches.
@@ -432,7 +432,7 @@ export function createController(): Controller {
 
   /** Opens a new tab in the repository root that runs `command`: in Orca inside Orca, in iTerm elsewhere. */
   const openTab = async (to: Host, root: string, name: string, command: string): Promise<Tab> => {
-    const inOrca = termProgram === 'Orca'
+    const inOrca = isOrca
     const run = await to.run(inOrca ? orcaArgv(root, name, command) : itermArgv(root, command), {
       cwd: root,
       timeoutMs: 30_000,
@@ -582,10 +582,10 @@ export function createController(): Controller {
   }
 
   return {
-    attach: (to, at, term) => {
+    attach: (to, at, inOrca) => {
       host = to
       cwd = at
-      termProgram = term
+      isOrca = inOrca
     },
     start,
     stop,

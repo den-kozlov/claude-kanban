@@ -181,7 +181,7 @@ worktree and no branch.
 
 **How.**
 1. Generate a session UUID and record `{issue, sessionId, startedAt}` (section 8).
-2. Inside Orca (`TERM_PROGRAM=Orca`): `orca terminal create --worktree path:<repo root> --command
+2. Inside Orca (`TERM_PROGRAM=Orca`, or no `TERM_PROGRAM` and `ORCA_TERMINAL_HANDLE` set): `orca terminal create --worktree path:<repo root> --command
    "claude --session-id <uuid> --name '#N <title>' '<prompt>'" --json`; keep the terminal handle
    to focus that tab later.
 3. Outside Orca: a new iTerm tab through `osascript`, running the same command in the repo root.
@@ -209,7 +209,9 @@ As built (stage 4):
   --git-common-dir` less `/.git`), so a board in a linked worktree starts cards in the root too.
 - The command: `claude --session-id <uuid> --name '#N <title>' '<prompt>'`, the name cut to 60
   cells, both quoted for the shell. The UUID is `crypto.randomUUID()`.
-- Orca: `TERM_PROGRAM` read with `$.env.get` at `session.start`; `orca terminal create
+- Orca: `TERM_PROGRAM` read with `$.env.get` at `session.start`; when it is unset,
+  `ORCA_TERMINAL_HANDLE` decides (a session the Claude daemon runs, such as a spare `claude`
+  claims, keeps Orca's variables but has no `TERM_PROGRAM`). `orca terminal create
   --worktree path:<root> --title '#N <title>' --command <command> --focus --json`. The handle is
   read from the JSON answer. A root Orca does not know as a worktree fails with Orca's reason.
 - iTerm: `osascript` with a script that opens a tab in the current window (a window when none

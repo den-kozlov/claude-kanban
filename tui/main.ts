@@ -13,6 +13,7 @@ import type { JsonValue } from 'claude-code'
 
 import Board from '../hooks/board'
 import { createController, isBoardMessage } from '../hooks/lib/controller'
+import { isInOrca } from '../hooks/lib/launch'
 import { truncate } from '../hooks/lib/text'
 import type { BoardProps } from '../types'
 import { mount } from './client'
@@ -171,7 +172,7 @@ async function main() {
   if (!store.isShared) {
     host.toast('No Claude Code session has run the mod yet: the board will not see the state of the sessions it starts')
   }
-  controller.attach(host, cwd, process.env.TERM_PROGRAM)
+  controller.attach(host, cwd, isInOrca(process.env.TERM_PROGRAM, process.env.ORCA_TERMINAL_HANDLE))
   controller.start()
   draw()
 }

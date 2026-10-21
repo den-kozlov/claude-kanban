@@ -3,7 +3,7 @@ import type { Register, Timer } from 'claude-code'
 
 import type { BoardProps } from '../types'
 import { createController, isBoardMessage, type Host } from './lib/controller'
-import { slashOf } from './lib/launch'
+import { isInOrca, slashOf } from './lib/launch'
 import { HEARTBEAT_MS, reportKey, reportOf, STALE_MS, type Report } from './lib/sessions'
 
 const PANE = 'board'
@@ -107,7 +107,9 @@ export const register: Register = on => {
         isTracked: recordId => reporter?.keys.includes(reportKey(recordId)) === true,
       },
     }
-    controller.attach(host, e.cwd, await $.env.get('TERM_PROGRAM').catch(() => undefined))
+    const termProgram = await $.env.get('TERM_PROGRAM').catch(() => undefined)
+    const orcaTerminal = await $.env.get('ORCA_TERMINAL_HANDLE').catch(() => undefined)
+    controller.attach(host, e.cwd, isInOrca(termProgram, orcaTerminal))
     await $.command.register({
       name: 'board',
       description: "Open or close the kanban board of this repository's GitHub issues",

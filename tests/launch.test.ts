@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   claudeCommand,
   focusArgv,
+  isInOrca,
   itermIdOf,
   launchOf,
   orcaHandleOf,
@@ -70,6 +71,15 @@ describe('launch', () => {
     expect(iterm.at(-1)).toBe('ABC-1')
     expect(itermIdOf('ABC-1\n')).toBe('ABC-1')
     expect(itermIdOf('')).toBeNull()
+  })
+
+  test("Orca is TERM_PROGRAM's answer, or Orca's terminal handle when TERM_PROGRAM is unset", async () => {
+    expect(isInOrca('Orca', undefined)).toBe(true)
+    expect(isInOrca('iTerm.app', 'term_1')).toBe(false)
+    // A session the Claude daemon runs has Orca's variables and no TERM_PROGRAM.
+    expect(isInOrca(undefined, 'term_1')).toBe(true)
+    expect(isInOrca(undefined, undefined)).toBe(false)
+    expect(isInOrca(undefined, '')).toBe(false)
   })
 
   test("Orca's handle is read wherever its answer nests it", async () => {

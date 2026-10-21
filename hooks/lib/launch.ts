@@ -95,6 +95,17 @@ export function resumeCommand(recordId: string, sessionId: string): string {
   return `${SESSION_ENV}=${recordId} claude --resume ${sessionId}`
 }
 
+/**
+ * Whether the board runs inside Orca: `TERM_PROGRAM` is `Orca`, or it is unset
+ * and Orca's own `ORCA_TERMINAL_HANDLE` is set. A Claude session the daemon
+ * runs (a spare `claude` claims, a background session) keeps Orca's variables
+ * but has no `TERM_PROGRAM`.
+ */
+export function isInOrca(termProgram: string | undefined, orcaTerminal: string | undefined): boolean {
+  if (termProgram !== undefined) return termProgram === 'Orca'
+  return orcaTerminal !== undefined && orcaTerminal !== ''
+}
+
 /** `orca terminal create`: a visible, focused tab in the repository root's worktree. */
 export function orcaArgv(root: string, name: string, command: string): string[] {
   return ['orca', 'terminal', 'create', '--worktree', `path:${root}`, '--title', name, '--command', command, '--focus', '--json']
