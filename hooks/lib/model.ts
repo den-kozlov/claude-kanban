@@ -35,7 +35,7 @@ export const DEFAULT_CONFIG: Config = {
   launch: [
     { label: 'needs-triage', prompt: '/triage #{n}' },
     { labelPrefix: 'wayfinder:', parentLabel: 'wayfinder:map', prompt: '/wayfinder #{n}' },
-    { label: 'ready-for-human', prompt: 'Start implementing issue #{n}' },
+    { label: 'ready-for-human', prompt: '/implement #{n} ({title})' },
   ],
   branchPatterns: {
     issue: 'issue-(\\d+)',
@@ -253,7 +253,7 @@ function cardOf(
   const hidden = new Set([...config.containers, ...Object.values(config.columns).flat()])
   const { overrides } = extras
   const session = extras.sessions.get(issue.number) ?? null
-  const launch = launchOf(issue.number, column, labelsOf(issue), parentLabels, config, session)
+  const launch = launchOf(issue.number, issue.title, column, labelsOf(issue), parentLabels, config, session)
   return {
     number: issue.number,
     title: oneLine(issue.title).slice(0, TITLE_LIMIT),
@@ -286,7 +286,7 @@ export function launchIn(
 ): Launch {
   const issue = snapshot.open.find(one => one.number === number) ?? snapshot.done.find(one => one.number === number)
   if (issue === undefined) return { kind: 'none', reason: `#${number} is not on the board` }
-  return launchOf(number, column, labelsOf(issue), parentLabelsIn(snapshot)(issue), config, session)
+  return launchOf(number, issue.title, column, labelsOf(issue), parentLabelsIn(snapshot)(issue), config, session)
 }
 
 export function buildBoard(

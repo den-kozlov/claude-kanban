@@ -343,7 +343,7 @@ part of it:
   "launch": [
     { "label": "needs-triage", "prompt": "/triage #{n}" },
     { "labelPrefix": "wayfinder:", "parentLabel": "wayfinder:map", "prompt": "/wayfinder #{n}" },
-    { "label": "ready-for-human", "prompt": "Start implementing issue #{n}" }
+    { "label": "ready-for-human", "prompt": "/implement #{n} ({title})" }
   ],
   "branchPatterns": { "issue": "issue-(\\d+)", "fallback": "-(\\d+)$", "sandcastle": "^sandcastle/issue-(\\d+)$" },
   "doneDays": 7,
@@ -357,6 +357,8 @@ As built (stage 6):
   (`git rev-parse --show-toplevel`), so a branch can carry its own board settings; with no file
   there, from the main worktree's root (a session Orca runs in a linked worktree finds the
   repository's file).
+- In a `launch` prompt, `{n}` is the issue's number (`#{n}`: `#7`) and `{title}` its title on
+  one line, each wherever it appears.
 - A part the file gives replaces the default's: a list whole (`containers`, `launch`, each
   column's labels), an object key by key (`columns`, `branchPatterns`). The parts it leaves out
   keep their defaults.

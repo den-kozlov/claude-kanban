@@ -10,8 +10,8 @@ import { oneLine, truncate } from './text'
 
 /**
  * One rule of `launch`: it matches an issue with the label, a label that
- * starts with `labelPrefix`, or a parent with `parentLabel`. `#{n}` in the
- * prompt is the issue's number.
+ * starts with `labelPrefix`, or a parent with `parentLabel`. `{n}` in the
+ * prompt is the issue's number (`#{n}`: `#7`), `{title}` its title on one line.
  */
 export type LaunchRule = { label?: string; labelPrefix?: string; parentLabel?: string; prompt: string }
 
@@ -49,6 +49,7 @@ const matches = (rule: LaunchRule, labels: string[], parentLabels: string[]) =>
  */
 export function launchOf(
   number: number,
+  title: string,
   column: ColumnId,
   labels: string[],
   parentLabels: string[],
@@ -63,7 +64,12 @@ export function launchOf(
     config.launch.find(one => matches(one, labels, parentLabels)) ??
     (column === 'triage' ? config.launch.find(one => one.label !== undefined && config.columns.triage.includes(one.label)) : undefined)
   if (rule === undefined) return { kind: 'none', reason: 'No launch rule matches its labels' }
-  return { kind: 'start', prompt: rule.prompt.replaceAll('#{n}', `#${number}`) }
+  return { kind: 'start', prompt: promptOf(rule.prompt, number, title) }
+}
+
+/** A rule's prompt for the issue: `{n}` its number, `{title}` its title on one line. */
+export function promptOf(template: string, number: number, title: string): string {
+  return template.replaceAll('{n}', `${number}`).replaceAll('{title}', oneLine(title))
 }
 
 /**

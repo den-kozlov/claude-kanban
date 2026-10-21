@@ -1,0 +1,21 @@
+{
+  "columns": {
+    "triage": ["needs-triage"],
+    "needsInfo": ["needs-info"],
+    "readyForAgent": ["ready-for-agent"],
+    "readyForHuman": ["ready-for-human"]
+  },
+  "containers": ["prd", "ideas", "wayfinder:map"],
+  "launch": [
+    { "label": "needs-triage", "prompt": "/triage #{n}" },
+    { "labelPrefix": "wayfinder:", "parentLabel": "wayfinder:map", "prompt": "/wayfinder #{n}" },
+    { "label": "ready-for-human", "prompt": "/implement #{n} ({title})" }
+  ],
+  "branchPatterns": {
+    "issue": "issue-(\\d+)",
+    "fallback": "-(\\d+)$",
+    "sandcastle": "^sandcastle/issue-(\\d+)$"
+  },
+  "doneDays": 7,
+  "refreshSeconds": 60
+}

@@ -487,9 +487,9 @@ test('outside Orca, S opens an iTerm tab in the repository root', async ($, on) 
   const argv = tabs.at(-1) ?? []
   expect(argv[0]).toBe('osascript')
   expect(argv.at(-1)).toMatch(
-    /^cd '\/repo' && KANBAN_BOARD_SESSION=\S+ claude --session-id \S+ --name '#1 Write the spec' 'Start implementing issue #1'$/,
+    /^cd '\/repo' && KANBAN_BOARD_SESSION=\S+ claude --session-id \S+ --name '#1 Write the spec' '\/implement #1 \(Write the spec\)'$/,
   )
-  expect(toasts.at(-1)).toBe('Started #1 in a new iTerm tab: Start implementing issue #1')
+  expect(toasts.at(-1)).toBe('Started #1 in a new iTerm tab: /implement #1 (Write the spec)')
   const records = stored.get('sessions:o/r') as Record<string, { terminal: unknown }[]>
   expect(records['1']?.[0]?.terminal).toEqual({ app: 'iterm', id: 'ITERM-1' })
   await board.unmount()
@@ -510,7 +510,10 @@ test('s on a card of a column that does not start says why and opens nothing', a
 })
 
 test('s and S in the detail view start the card, or the view shows why it does not start', async ($, on) => {
-  const { clock, tabs, submitted } = await openBoard($, on, { term: 'Orca' })
+  // A prompt of the config's, not a slash command: `s` submits it as the person's words.
+  const launch = [{ label: 'ready-for-human', prompt: 'Start implementing issue #{n}: {title}' }]
+  const files = new Map([['/repo/.claude/kanban.json', JSON.stringify({ launch })]])
+  const { clock, tabs, submitted } = await openBoard($, on, { term: 'Orca', files })
   const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const text = async (pattern: RegExp) => (await board.find({ type: 'Text', text: pattern, in: 'board' }))?.text
 
@@ -539,7 +542,7 @@ test('s and S in the detail view start the card, or the view shows why it does n
   await clock.settle()
   await board.key({ key: 's', in: 'board' })
   await clock.settle()
-  expect(submitted).toEqual([{ text: 'Start implementing issue #2', asUser: true }])
+  expect(submitted).toEqual([{ text: 'Start implementing issue #2: Fix the login', asUser: true }])
   expect(tabs).toHaveLength(1)
 
   await board.unmount()

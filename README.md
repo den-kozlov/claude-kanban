@@ -3,7 +3,7 @@
 A Claude Code mod: a kanban board of the current repository's GitHub issues in a pane beside the
 transcript. Cards are ordered by the GitHub `Priority` issue field and collapse to one line when a
 column does not fit. `s` starts a card with the prompt its labels call for (`/triage`,
-`/wayfinder` or an implementation brief) in the current session; `S` starts it in a parallel
+`/wayfinder` or `/implement`) in the current session; `S` starts it in a parallel
 interactive Claude session (a new Orca or iTerm tab).
 
 Design: [docs/spec.md](docs/spec.md).
@@ -91,8 +91,20 @@ board takes the newest store file; `KANBAN_BOARD_STORE=<path>` names another one
 
 The defaults follow the mattpocock triage labels. `.claude/kanban.json` in the repository changes
 any part of them: the labels of each column, the container labels, the prompts `s` starts with,
-the branch patterns, how many days Done shows and how often the board refreshes. The full
-shape is in [section 10 of the spec](docs/spec.md#10-configuration). For example:
+the branch patterns, how many days Done shows and how often the board refreshes.
+[`docs/kanban.example.json`](docs/kanban.example.json) gives every option with its default: copy
+it to `.claude/kanban.json` and change what you need, or keep only the parts you change.
+
+| Option | Default | What it is |
+|---|---|---|
+| `columns.triage`, `.needsInfo`, `.readyForAgent`, `.readyForHuman` | `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` | The labels that put an open issue in the column |
+| `containers` | `prd`, `ideas`, `wayfinder:map` | The labels of issues that hold others: the board shows them as a filter, not as cards |
+| `launch` | `/triage`, `/wayfinder`, `/implement` rules | The prompt `s`/`S` starts a card with (below) |
+| `branchPatterns.issue`, `.fallback`, `.sandcastle` | `issue-(\d+)`, `-(\d+)$`, `^sandcastle/issue-(\d+)$` | Regular expressions that find the issue number in a branch name; each needs a group around the number |
+| `doneDays` | `7` | How far back the Done column reaches, in days (1–365) |
+| `refreshSeconds` | `60` | How often the board reads GitHub, in seconds (15–3600) |
+
+The full rules are in [section 10 of the spec](docs/spec.md#10-configuration). For example:
 
 ```json
 {
@@ -100,6 +112,21 @@ shape is in [section 10 of the spec](docs/spec.md#10-configuration). For example
   "refreshSeconds": 120
 }
 ```
+
+Each `launch` rule gives the prompt for the issues with its label (`label`), a label that starts
+with `labelPrefix`, or a parent with `parentLabel`; the first that matches wins. In the prompt,
+`{n}` is the issue's number and `{title}` its title:
+
+```json
+{
+  "launch": [
+    { "label": "needs-triage", "prompt": "/triage #{n}" },
+    { "label": "ready-for-human", "prompt": "/implement #{n} ({title})" }
+  ]
+}
+```
+
+`launch` replaces the default list whole, so give every rule you want.
 
 `doneDays` is how far back the Done column reaches (the issues closed in the last N days);
 `d` only shows or hides that column.

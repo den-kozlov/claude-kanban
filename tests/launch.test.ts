@@ -7,6 +7,7 @@ import {
   itermIdOf,
   launchOf,
   orcaHandleOf,
+  promptOf,
   resumeCommand,
   sessionName,
   shellQuote,
@@ -16,11 +17,11 @@ import { DEFAULT_CONFIG } from '../hooks/lib/model'
 import type { SessionState } from '../types'
 
 const launch = (
-  column: Parameters<typeof launchOf>[1],
+  column: Parameters<typeof launchOf>[2],
   labels: string[],
   parentLabels: string[] = [],
   session: SessionState | null = null,
-) => launchOf(7, column, labels, parentLabels, DEFAULT_CONFIG, session)
+) => launchOf(7, 'Fix the\nhauler', column, labels, parentLabels, DEFAULT_CONFIG, session)
 
 const start = (prompt: string) => ({ kind: 'start', prompt })
 const none = (reason: string) => ({ kind: 'none', reason })
@@ -30,7 +31,13 @@ describe('launch', () => {
     expect(launch('triage', ['needs-triage', 'wayfinder:research'])).toEqual(start('/triage #7'))
     expect(launch('readyForHuman', ['ready-for-human', 'wayfinder:research'])).toEqual(start('/wayfinder #7'))
     expect(launch('readyForHuman', ['ready-for-human'], ['wayfinder:map'])).toEqual(start('/wayfinder #7'))
-    expect(launch('readyForHuman', ['ready-for-human'])).toEqual(start('Start implementing issue #7'))
+    expect(launch('readyForHuman', ['ready-for-human'])).toEqual(start('/implement #7 (Fix the hauler)'))
+  })
+
+  test('a prompt takes the number for {n} and the one-line title for {title}, each time they appear', async () => {
+    expect(promptOf('/implement #{n} ({title})', 12, 'Spawn  more\nhaulers')).toBe('/implement #12 (Spawn more haulers)')
+    expect(promptOf('{n}: {title}; again {n}', 3, 'X')).toBe('3: X; again 3')
+    expect(promptOf('Work on it', 3, 'X')).toBe('Work on it')
   })
 
   test('a Triage card with no label gets /triage', async () => {
@@ -50,7 +57,7 @@ describe('launch', () => {
     expect(launch('inProgress', [], [], 'ended')).toEqual({ kind: 'resume' })
     expect(launch('review', [], [], 'ended')).toEqual({ kind: 'resume' })
     // After /triage the card stands in a label column again: s starts its next step.
-    expect(launch('readyForHuman', ['ready-for-human'], [], 'ended')).toEqual(start('Start implementing issue #7'))
+    expect(launch('readyForHuman', ['ready-for-human'], [], 'ended')).toEqual(start('/implement #7 (Fix the hauler)'))
   })
 
   test('the command quotes the name and the prompt for the shell', async () => {
