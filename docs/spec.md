@@ -35,6 +35,19 @@ Done, Review, In progress, Blocked, then the label columns.
 
 Open issues that match no rule go to Triage.
 
+**Label rules** (section 10). Each of the eight columns can also ask for labels, on top of its own
+rule: `any` (at least one of these), `all` (every one of these), `none` (not one of these). An issue
+a column refuses goes on to the next column in the order above, so a card with an open PR can stand
+in a label column; it keeps its badges and `s` acts by the column it stands in. A closed issue has
+only Done. Triage takes the open issues that are left by its `all` and `none`, whatever its `any`.
+An issue no column takes has no card.
+
+`exclude` takes an issue off the board before all of this, and a container out of the filter. A
+column's rule does not touch containers, which stand in no column. An issue with no card is still
+an issue: it blocks others, the detail view shows it through a link, its parent's labels still
+choose its children's prompts, and its session runs on, with no card to focus it from. The board
+does not count these issues.
+
 **Containers.** Issues labelled `prd`, `ideas` or `wayfinder:map` are not tasks and never stand in
 a column. They feed a filter (`f`): choosing one shows only its sub-issues (GitHub `parent`).
 No filter shows every task.
@@ -48,7 +61,8 @@ under another. The board sizes its tree to `e.props.bodyColumns`.
 A full card shows:
 - `#N` and the title (up to two lines);
 - its Priority, when it has one (added in stage 3, so `p` shows what it set);
-- up to three labels (container and column labels excluded);
+- up to three labels (container labels and those of a column's `any` and `all` excluded; those of
+  `none` show);
 - the comment count;
 - a session badge: starting / working / waiting for input / ended (section 8; built in stage 5);
 - a PR badge with its CI state, when a PR exists;
@@ -340,6 +354,7 @@ part of it:
     "readyForHuman": ["ready-for-human"]
   },
   "containers": ["prd", "ideas", "wayfinder:map"],
+  "exclude": [],
   "launch": [
     { "label": "needs-triage", "prompt": "/triage #{n}" },
     { "labelPrefix": "wayfinder:", "parentLabel": "wayfinder:map", "prompt": "/wayfinder #{n}" },
@@ -359,14 +374,23 @@ As built (stage 6):
   repository's file).
 - In a `launch` prompt, `{n}` is the issue's number (`#{n}`: `#7`) and `{title}` its title on
   one line, each wherever it appears.
-- A part the file gives replaces the default's: a list whole (`containers`, `launch`, each
-  column's labels), an object key by key (`columns`, `branchPatterns`). The parts it leaves out
-  keep their defaults.
+- `columns` takes all eight columns (`blocked`, `triage`, `needsInfo`, `readyForAgent`,
+  `readyForHuman`, `inProgress`, `review`, `done`). A column is an object with `any`, `all` and
+  `none` (section 2); a list is its `any`. So `"triage": { "none": ["lab"] }` keeps `needs-triage`
+  as the `any` of Triage. Blocked, In progress, Review and Done have no default `any`: they ask for
+  no label until the file gives one. An empty `any` takes nothing by that column.
+- Labels compare exactly, as in `containers` and `launch`, though GitHub ignores their case. The
+  board reads the first 20 labels of an issue (section 9), so a rule does not see a later one.
+- A part the file gives replaces the default's: a list whole (`containers`, `exclude`, `launch`, a
+  column's `any`, `all` and `none`), an object key by key (`columns`, a column, `branchPatterns`).
+  The parts it leaves out keep their defaults.
 - A wrong part keeps its default, and a wrong `launch` rule is left out. Wrong is: not the type
   above, a key the board does not know, a label name that is not a non-empty string, a launch
   rule with no `prompt` or with neither `label` nor `labelPrefix`, a branch pattern that does
   not compile or has no group around the number, `doneDays` outside 1–365, `refreshSeconds`
-  outside 15–3600. A file that is not a JSON object gives the defaults.
+  outside 15–3600. A label in a column's `none` and in its `any` or `all` keeps that column's
+  default whole; a label in `exclude` and in a column is not wrong. A file that is not a JSON
+  object gives the defaults.
 - The status bar shows the first problem (`⚠ kanban.json: <problem>`) while the file has one. A
   toast names it too (`.claude/kanban.json: <problem>; the board skips it`) when the list of
   problems changes, and the debug log gets each one. No file: the defaults, nothing shown.
@@ -408,7 +432,7 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 | 3. Priority | done | Section 4: read (stage 1), field and option ids by name, `p`/`P` on the board and in the detail view, the move at once, revert with a toast, off without the field; the Priority on full cards | — |
 | 4. Starting cards | done | Section 7: `s` on the board and in the detail view, the prompts from `launch` rules, the repository root, the Orca tab, the iTerm tab, session records in `$.store`, the `started` badge | — (focus, resume and In progress came with stage 5) |
 | 5. Session tracking | done | Section 8: the reporter in the started sessions, the session badge on cards and in the detail view, a running session in In progress, `s` focusing its tab or resuming the last session | Notifications (not planned) |
-| 6. Configuration file | done | Section 10: `.claude/kanban.json` read at each refresh from the worktree root, merged over the defaults part by part, wrong parts skipped and named in a toast | — |
+| 6. Configuration file | done | Section 10: `.claude/kanban.json` read at each refresh from the worktree root, merged over the defaults part by part, wrong parts skipped and named in a toast; later `exclude` and the label rules of all eight columns (section 2) | — |
 | 7. Terminal board | done | `bin/kanban-board [folder]` on Bun: the pane's surface module and background work (moved to `hooks/lib/controller.ts`) in a full-screen terminal; keys without a click, `Esc` back, `q` quits, mouse clicks and wheel, toasts in the bottom line; the mod's store file shared with the pane | A Node build without Bun (not planned) |
 | 8. Start here | done | Section 7: `s` runs the card's prompt in the board's session (a slash command with `$.command.run`, other text with `$.prompt.submit`), recorded and reported (section 8); `S` starts it in a new tab; the same focus and resume for both; the hints | — |
 

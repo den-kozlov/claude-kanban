@@ -5,7 +5,7 @@
 // Pure: no `$`, so the tests run it directly.
 
 import type { LaunchRule } from './launch'
-import { DEFAULT_CONFIG, type Config } from './model'
+import { DEFAULT_CONFIG, type ColumnRule, type Config } from './model'
 
 /** Where the file is, from the root of the worktree the session runs in. */
 export const CONFIG_PATH = '.claude/kanban.json'
@@ -31,10 +31,32 @@ function unknownKeys(value: Record<string, unknown>, known: readonly string[], a
   }
 }
 
-function listOf(value: unknown, fallback: string[], at: string, problems: Problems): string[] {
+function listOf<F>(value: unknown, fallback: F, at: string, problems: Problems): string[] | F {
   if (value === undefined) return fallback
   if (isStringList(value)) return value
   problems.push(`${at} must be a list of label names`)
+  return fallback
+}
+
+const COLUMN_KEYS = ['any', 'all', 'none'] as const
+
+/** One column's rule: a list is its `any`. A label in `none` and in `any` or `all` keeps the default. */
+function columnRuleOf(value: unknown, fallback: ColumnRule, at: string, problems: Problems): ColumnRule {
+  if (value === undefined) return fallback
+  if (isStringList(value)) return { ...fallback, any: value }
+  if (!isObject(value)) {
+    problems.push(`${at} must be a list of label names or an object with any, all and none`)
+    return fallback
+  }
+  unknownKeys(value, COLUMN_KEYS, `${at}.`, problems)
+  const rule: ColumnRule = {
+    any: listOf(value.any, fallback.any, `${at}.any`, problems),
+    all: listOf(value.all, fallback.all, `${at}.all`, problems),
+    none: listOf(value.none, fallback.none, `${at}.none`, problems),
+  }
+  const clash = rule.none.find(label => rule.all.includes(label) || rule.any?.includes(label) === true)
+  if (clash === undefined) return rule
+  problems.push(`${at} has ${clash} in none and also in any or all`)
   return fallback
 }
 
@@ -42,13 +64,13 @@ function columnsOf(value: unknown, problems: Problems): Config['columns'] {
   const fallback = DEFAULT_CONFIG.columns
   if (value === undefined) return fallback
   if (!isObject(value)) {
-    problems.push('columns must be an object of label lists')
+    problems.push('columns must be an object of column rules')
     return fallback
   }
   const keys = Object.keys(fallback) as (keyof Config['columns'])[]
   unknownKeys(value, keys, 'columns.', problems)
   return Object.fromEntries(
-    keys.map(key => [key, listOf(value[key], fallback[key], `columns.${key}`, problems)]),
+    keys.map(key => [key, columnRuleOf(value[key], fallback[key], `columns.${key}`, problems)]),
   ) as Config['columns']
 }
 
@@ -135,7 +157,7 @@ function wholeOf(value: unknown, fallback: number, range: { min: number; max: nu
   return fallback
 }
 
-const KEYS = ['columns', 'containers', 'launch', 'branchPatterns', 'doneDays', 'refreshSeconds'] as const
+const KEYS = ['columns', 'containers', 'exclude', 'launch', 'branchPatterns', 'doneDays', 'refreshSeconds'] as const
 
 /** The config from the file's text; null (no file) gives the defaults. */
 export function configOf(text: string | null): ConfigRead {
@@ -153,6 +175,7 @@ export function configOf(text: string | null): ConfigRead {
   const config: Config = {
     columns: columnsOf(value.columns, problems),
     containers: listOf(value.containers, DEFAULT_CONFIG.containers, 'containers', problems),
+    exclude: listOf(value.exclude, DEFAULT_CONFIG.exclude, 'exclude', problems),
     launch: launchOf(value.launch, problems),
     branchPatterns: patternsOf(value.branchPatterns, problems),
     doneDays: wholeOf(value.doneDays, DEFAULT_CONFIG.doneDays, DONE_DAYS, 'doneDays', problems),

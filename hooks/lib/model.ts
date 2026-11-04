@@ -9,14 +9,14 @@ import { oneLine } from './text'
 /** Titles are cut so the board stays well under a `Client`'s 100,000 characters of props. */
 const TITLE_LIMIT = 200
 
+/** What a column asks of an issue's labels, beside its own rule; `any` null asks nothing. */
+export type ColumnRule = { any: string[] | null; all: string[]; none: string[] }
+
 export type Config = {
-  columns: {
-    triage: string[]
-    needsInfo: string[]
-    readyForAgent: string[]
-    readyForHuman: string[]
-  }
+  columns: Record<ColumnId, ColumnRule>
   containers: string[]
+  /** The labels that take an issue off the board. */
+  exclude: string[]
   /** Spec section 7: the prompt a started card gets, the first matching rule's. */
   launch: LaunchRule[]
   branchPatterns: { issue: string; fallback: string; sandcastle: string }
@@ -24,14 +24,22 @@ export type Config = {
   refreshSeconds: number
 }
 
+const anyOf = (...any: string[]): ColumnRule => ({ any, all: [], none: [] })
+const NO_LABELS: ColumnRule = { any: null, all: [], none: [] }
+
 export const DEFAULT_CONFIG: Config = {
   columns: {
-    triage: ['needs-triage'],
-    needsInfo: ['needs-info'],
-    readyForAgent: ['ready-for-agent'],
-    readyForHuman: ['ready-for-human'],
+    blocked: NO_LABELS,
+    triage: anyOf('needs-triage'),
+    needsInfo: anyOf('needs-info'),
+    readyForAgent: anyOf('ready-for-agent'),
+    readyForHuman: anyOf('ready-for-human'),
+    inProgress: NO_LABELS,
+    review: NO_LABELS,
+    done: NO_LABELS,
   },
   containers: ['prd', 'ideas', 'wayfinder:map'],
+  exclude: [],
   launch: [
     { label: 'needs-triage', prompt: '/triage #{n}' },
     { labelPrefix: 'wayfinder:', parentLabel: 'wayfinder:map', prompt: '/wayfinder #{n}' },
@@ -208,21 +216,35 @@ export function branchesByIssue(branches: string[], config: Config): Map<number,
 const isContainer = (issue: RawIssue, config: Config) =>
   labelsOf(issue).some(label => config.containers.includes(label))
 
+const isExcluded = (issue: RawIssue, config: Config) =>
+  labelsOf(issue).some(label => config.exclude.includes(label))
+
+/** A column's `all` and `none`. */
+const passes = (rule: ColumnRule, labels: string[]) =>
+  rule.all.every(label => labels.includes(label)) && !rule.none.some(label => labels.includes(label))
+
+/** A column's `any`, `all` and `none`. */
+const takes = (rule: ColumnRule, labels: string[]) =>
+  (rule.any === null || rule.any.some(label => labels.includes(label))) && passes(rule, labels)
+
 /**
- * The first column whose rule matches: Review, In progress (a branch, or a
- * session of the board that runs), Blocked, the label columns.
+ * The first column whose rule and labels match: Review, In progress (a branch,
+ * or a session of the board that runs), Blocked, the label columns. Triage takes
+ * the rest by its `all` and `none`; what it refuses has no column.
  */
 function columnOf(
   issue: RawIssue,
   config: Config,
   pr: PrBadge | null,
   isInProgress: boolean,
-): ColumnId {
-  if (pr !== null) return 'review'
-  if (isInProgress) return 'inProgress'
-  if ((issue.blockedBy?.nodes ?? []).some(blocker => blocker.state === 'OPEN')) return 'blocked'
+): ColumnId | null {
   const labels = labelsOf(issue)
-  return LABEL_COLUMNS.find(id => config.columns[id].some(label => labels.includes(label))) ?? 'triage'
+  const { columns } = config
+  if (pr !== null && takes(columns.review, labels)) return 'review'
+  if (isInProgress && takes(columns.inProgress, labels)) return 'inProgress'
+  const isBlocked = (issue.blockedBy?.nodes ?? []).some(blocker => blocker.state === 'OPEN')
+  if (isBlocked && takes(columns.blocked, labels)) return 'blocked'
+  return LABEL_COLUMNS.find(id => takes(columns[id], labels)) ?? (passes(columns.triage, labels) ? 'triage' : null)
 }
 
 /** Priorities the board shows ahead of GitHub: the writes it has sent and not yet read back. */
@@ -250,7 +272,10 @@ function cardOf(
   extras: Required<BoardExtras>,
   parentLabels: string[],
 ): Omit<Card, 'pr' | 'isSandcastle'> {
-  const hidden = new Set([...config.containers, ...Object.values(config.columns).flat()])
+  const hidden = new Set([
+    ...config.containers,
+    ...Object.values(config.columns).flatMap(rule => [...(rule.any ?? []), ...rule.all]),
+  ])
   const { overrides } = extras
   const session = extras.sessions.get(issue.number) ?? null
   const launch = launchOf(issue.number, issue.title, column, labelsOf(issue), parentLabels, config, session)
@@ -309,11 +334,13 @@ export function buildBoard(
   const cards: Card[] = []
 
   for (const issue of snapshot.done) {
-    if (isContainer(issue, config)) continue
+    if (isExcluded(issue, config) || isContainer(issue, config)) continue
+    if (!takes(config.columns.done, labelsOf(issue))) continue
     cards.push({ ...cardOf(issue, 'done', config, all, parentLabelsOf(issue)), pr: null, isSandcastle: false })
   }
 
   for (const issue of snapshot.open) {
+    if (isExcluded(issue, config)) continue
     if (isContainer(issue, config)) {
       containers.push({ number: issue.number, title: oneLine(issue.title).slice(0, TITLE_LIMIT) })
       continue
@@ -324,6 +351,7 @@ export function buildBoard(
       (linked === undefined ? null : { number: linked.number, isDraft: linked.isDraft, ci: null })
     const branch = inProgress.get(issue.number)
     const column = columnOf(issue, config, pr, branch !== undefined || isLive(all.sessions.get(issue.number) ?? null))
+    if (column === null) continue
     cards.push({
       ...cardOf(issue, column, config, all, parentLabelsOf(issue)),
       pr,

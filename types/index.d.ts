@@ -31,7 +31,7 @@ export type Card = {
   number: number
   title: string
   column: ColumnId
-  /** Up to three labels, container and column labels left out. */
+  /** Up to three labels, container labels and those of a column's `any` and `all` left out. */
   labels: string[]
   comments: number
   priority: Priority | null

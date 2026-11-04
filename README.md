@@ -90,14 +90,17 @@ board takes the newest store file; `KANBAN_BOARD_STORE=<path>` names another one
 ## Configure
 
 The defaults follow the mattpocock triage labels. `.claude/kanban.json` in the repository changes
-any part of them: the labels of each column, the container labels, the prompts `s` starts with,
+any part of them: the labels of each column, the labels that keep an issue off the board, the
+container labels, the prompts `s` starts with,
 the branch patterns, how many days Done shows and how often the board refreshes.
 [`docs/kanban.example.json`](docs/kanban.example.json) gives every option with its default: copy
 it to `.claude/kanban.json` and change what you need, or keep only the parts you change.
 
 | Option | Default | What it is |
 |---|---|---|
-| `columns.triage`, `.needsInfo`, `.readyForAgent`, `.readyForHuman` | `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` | The labels that put an open issue in the column |
+| `columns.triage`, `.needsInfo`, `.readyForAgent`, `.readyForHuman` | `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` | The labels that put an open issue in the column (below) |
+| `columns.blocked`, `.inProgress`, `.review`, `.done` | none | The labels these columns also ask for, beside their own rule |
+| `exclude` | none | The labels that keep an issue off the board, and out of the filter when it is a container |
 | `containers` | `prd`, `ideas`, `wayfinder:map` | The labels of issues that hold others: the board shows them as a filter, not as cards |
 | `launch` | `/triage`, `/wayfinder`, `/implement` rules | The prompt `s`/`S` starts a card with (below) |
 | `branchPatterns.issue`, `.fallback`, `.sandcastle` | `issue-(\d+)`, `-(\d+)$`, `^sandcastle/issue-(\d+)$` | Regular expressions that find the issue number in a branch name; each needs a group around the number |
@@ -112,6 +115,25 @@ The full rules are in [section 10 of the spec](docs/spec.md#10-configuration). F
   "refreshSeconds": 120
 }
 ```
+
+A column is a list of labels (at least one of them), or an object: `any` (at least one of these),
+`all` (every one of these), `none` (not one of these). What it leaves out keeps its default. An
+issue a column refuses goes on to the next one: Review, In progress, Blocked, Triage, Needs info,
+Ready for agent, Ready for human. Triage takes the rest by its `all` and `none`, and an issue it
+refuses has no card. A closed issue has only Done. To keep issues off the board, use `exclude`:
+
+```json
+{
+  "exclude": ["lab"],
+  "columns": {
+    "readyForAgent": { "all": ["backend"] },
+    "review": { "none": ["experiment"] }
+  }
+}
+```
+
+An issue with no card still blocks others, and a link in the detail view still shows it. The
+board does not count these issues.
 
 Each `launch` rule gives the prompt for the issues with its label (`label`), a label that starts
 with `labelPrefix`, or a parent with `parentLabel`; the first that matches wins. In the prompt,
