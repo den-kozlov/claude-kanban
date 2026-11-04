@@ -1,11 +1,16 @@
 {
   "columns": {
-    "triage": ["needs-triage"],
+    "blocked": {},
+    "triage": { "any": ["needs-triage"], "all": [], "none": [] },
     "needsInfo": ["needs-info"],
     "readyForAgent": ["ready-for-agent"],
-    "readyForHuman": ["ready-for-human"]
+    "readyForHuman": ["ready-for-human"],
+    "inProgress": {},
+    "review": {},
+    "done": {}
   },
   "containers": ["prd", "ideas", "wayfinder:map"],
+  "exclude": [],
   "launch": [
     { "label": "needs-triage", "prompt": "/triage #{n}" },
     { "labelPrefix": "wayfinder:", "parentLabel": "wayfinder:map", "prompt": "/wayfinder #{n}" },

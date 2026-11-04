@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { configOf } from '../hooks/lib/config'
 import {
   buildBoard,
   DEFAULT_CONFIG,
@@ -115,7 +116,179 @@ describe('containers', () => {
   })
 })
 
+describe('label rules', () => {
+  const build = (rules: object, part: Partial<Snapshot>, branches: string[] = []) =>
+    buildBoard(snapshot(part), branches, configOf(JSON.stringify(rules)).config, 0)
+
+  test('exclude takes an issue off the board, whatever else it is', async () => {
+    const board = build(
+      { exclude: ['lab'] },
+      {
+        open: [
+          issue(1, { labelNames: ['lab', 'ready-for-human'] }),
+          issue(2, { labelNames: ['lab'] }),
+          issue(3, { labelNames: ['lab'] }),
+          issue(4, { labelNames: ['lab'] }),
+          issue(5, { labelNames: ['ready-for-human'] }),
+        ],
+        done: [issue(6, { labelNames: ['lab'] })],
+        prs: [pr(20, 'feature/issue-2')],
+      },
+      ['issue-3-start'],
+    )
+
+    expect(board.cards.map(card => card.number)).toEqual([5])
+  })
+
+  test('exclude takes a container out of the filter and keeps its sub-issues', async () => {
+    const board = build(
+      { exclude: ['lab'] },
+      { open: [issue(1, { labelNames: ['prd', 'lab'] }), issue(2, { parent: { number: 1 } })] },
+    )
+
+    expect(board.containers).toEqual([])
+    expect(board.cards.map(card => card.number)).toEqual([2])
+    expect(board.cards[0]?.parent).toBe(1)
+  })
+
+  test('without a config file the board keeps every issue it kept', async () => {
+    const board = buildBoard(
+      snapshot({ open: [issue(1, { labelNames: ['lab'] })], done: [issue(2, { labelNames: ['lab'] })] }),
+      [],
+      DEFAULT_CONFIG,
+      0,
+    )
+
+    expect([1, 2].map(n => columnOf(board, n))).toEqual(['triage', 'done'])
+  })
+
+  test('a column rule leaves a container alone', async () => {
+    const board = build({ columns: { triage: { none: ['prd'] } } }, { open: [issue(1, { labelNames: ['prd'] })] })
+
+    expect(board.containers).toEqual([{ number: 1, title: 'Issue 1' }])
+  })
+
+  test('an issue off the board still blocks another', async () => {
+    const board = build(
+      { exclude: ['lab'] },
+      {
+        open: [
+          issue(1, { labelNames: ['lab'] }),
+          issue(2, { labelNames: ['ready-for-agent'], blockedBy: { nodes: [{ number: 1, state: 'OPEN' }] } }),
+        ],
+      },
+    )
+
+    expect(columnOf(board, 2)).toBe('blocked')
+  })
+
+  test('an issue a column refuses goes on to the next column', async () => {
+    const rules = { columns: { review: { none: ['lab'] }, inProgress: { none: ['lab'] }, blocked: { none: ['lab'] } } }
+    const board = build(
+      rules,
+      {
+        open: [
+          issue(1, { labelNames: ['lab', 'ready-for-human'] }),
+          issue(2, { labelNames: ['lab', 'ready-for-human'] }),
+          issue(3, { labelNames: ['lab', 'ready-for-human'], blockedBy: { nodes: [{ number: 9, state: 'OPEN' }] } }),
+          issue(4, { labelNames: ['ready-for-human'] }),
+        ],
+        prs: [pr(20, 'feature/issue-1'), pr(21, 'feature/issue-4')],
+      },
+      ['issue-2-start'],
+    )
+
+    expect([1, 2, 3, 4].map(n => columnOf(board, n))).toEqual(['readyForHuman', 'readyForHuman', 'readyForHuman', 'review'])
+  })
+
+  test('a card that went on keeps its badges and starts by the column it stands in', async () => {
+    const board = build(
+      { columns: { review: { none: ['lab'] }, inProgress: { none: ['lab'] } } },
+      {
+        open: [issue(1, { labelNames: ['lab', 'ready-for-human'] }), issue(2, { labelNames: ['lab', 'ready-for-human'] })],
+        prs: [pr(20, 'feature/issue-1')],
+      },
+      ['sandcastle/issue-2'],
+    )
+
+    expect(board.cards[0]?.pr?.number).toBe(20)
+    expect(board.cards[0]?.startAs).toBe('start')
+    expect(board.cards[1]?.isSandcastle).toBe(true)
+  })
+
+  test('any and all ask for labels in any column', async () => {
+    const board = build(
+      { columns: { review: ['ship'], readyForAgent: { all: ['backend', 'api'] } } },
+      {
+        open: [
+          issue(1, { labelNames: ['ship'] }),
+          issue(2, { labelNames: ['ready-for-human'] }),
+          issue(3, { labelNames: ['ready-for-agent', 'backend', 'api'] }),
+          issue(4, { labelNames: ['ready-for-agent', 'backend'] }),
+        ],
+        prs: [pr(20, 'feature/issue-1'), pr(21, 'feature/issue-2')],
+      },
+    )
+
+    expect([1, 2, 3, 4].map(n => columnOf(board, n))).toEqual(['review', 'readyForHuman', 'readyForAgent', 'triage'])
+  })
+
+  test('an empty any takes nothing by that column', async () => {
+    const board = build(
+      { columns: { review: [], needsInfo: { any: [] } } },
+      {
+        open: [issue(1, { labelNames: ['ready-for-human'] }), issue(2, { labelNames: ['needs-info'] })],
+        prs: [pr(20, 'feature/issue-1')],
+      },
+    )
+
+    expect([1, 2].map(n => columnOf(board, n))).toEqual(['readyForHuman', 'triage'])
+  })
+
+  test('Triage takes the rest by all and none, whatever its any', async () => {
+    const none = build(
+      { columns: { triage: { none: ['lab'] } } },
+      {
+        open: [
+          issue(1, { labelNames: ['lab'] }),
+          issue(2, { labelNames: ['lab', 'ready-for-agent'] }),
+          issue(3, { labelNames: ['lab', 'needs-triage', 'needs-info'] }),
+          issue(4),
+          issue(5, { labelNames: ['needs-triage'] }),
+        ],
+      },
+    )
+    expect([1, 2, 3, 4, 5].map(n => columnOf(none, n))).toEqual([undefined, 'readyForAgent', 'needsInfo', 'triage', 'triage'])
+
+    const all = build(
+      { columns: { triage: { all: ['x'] } } },
+      { open: [issue(1), issue(2, { labelNames: ['x'] }), issue(3, { labelNames: ['needs-triage'] })] },
+    )
+    expect([1, 2, 3].map(n => columnOf(all, n))).toEqual([undefined, 'triage', undefined])
+  })
+
+  test('Done is the only column for a closed issue', async () => {
+    const board = build(
+      { columns: { done: { none: ['lab'] }, triage: { none: ['x'] } } },
+      { done: [issue(1, { labelNames: ['lab'] }), issue(2, { labelNames: ['x'] }), issue(3)] },
+    )
+
+    expect([1, 2, 3].map(n => columnOf(board, n))).toEqual([undefined, 'done', 'done'])
+  })
+})
+
 describe('cards', () => {
+  test('a card leaves out the labels of any and all, and shows those of none', async () => {
+    const board = buildBoard(
+      snapshot({ open: [issue(1, { labelNames: ['needs-triage', 'must', 'gone', 'wip', 'bug'] })] }),
+      [],
+      configOf(JSON.stringify({ columns: { review: { any: ['gone'], all: ['must'], none: ['wip'] } } })).config,
+      0,
+    )
+
+    expect(board.cards[0]?.labels).toEqual(['wip', 'bug'])
+  })
+
   test('a card shows up to three labels, column labels left out', async () => {
     const board = buildBoard(
       snapshot({ open: [issue(1, { labelNames: ['needs-triage', 'bug', 'ready-for-agent', 'ui', 'api', 'docs'] })] }),

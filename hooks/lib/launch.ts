@@ -62,7 +62,7 @@ export function launchOf(
   if (reason !== undefined) return { kind: 'none', reason }
   const rule =
     config.launch.find(one => matches(one, labels, parentLabels)) ??
-    (column === 'triage' ? config.launch.find(one => one.label !== undefined && config.columns.triage.includes(one.label)) : undefined)
+    (column === 'triage' ? config.launch.find(one => one.label !== undefined && config.columns.triage.any?.includes(one.label) === true) : undefined)
   if (rule === undefined) return { kind: 'none', reason: 'No launch rule matches its labels' }
   return { kind: 'start', prompt: promptOf(rule.prompt, number, title) }
 }
