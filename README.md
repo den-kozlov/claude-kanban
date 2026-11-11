@@ -39,6 +39,7 @@ session.
 | `s` | start the card in the current session: its prompt runs as if you typed it |
 | `S` | start the card in a new Claude session (a new Orca tab inside Orca, else an iTerm tab) |
 | `s` / `S` | on a card whose session runs, bring its tab forward; on In progress or Review, resume its last session in a new tab |
+| `x` | set the card aside: its session no longer counts, and the card goes back to its column |
 | `o` | open the issue in the browser |
 | `p` / `P` | next Priority (none → Urgent → High → Medium → Low → none) / clear it |
 | `r` | refresh now |
@@ -48,14 +49,15 @@ session.
 The detail view shows the labels, Priority, assignees, parent and blockers, the description and
 the last three comments. `↑`/`↓` go from link to link (the parent, then the blockers) and
 scroll the text past them; `Enter` (or a click on the link) shows that issue; back on the columns, it is the card
-selected. `s`/`S`, `o` and `p`/`P` act on the issue shown. `Esc` gives the keys back to the prompt,
+selected. `s`/`S`, `x`, `o` and `p`/`P` act on the issue shown. `Esc` gives the keys back to the prompt,
 as everywhere in Claude Code: a click on the board takes them again.
 
 A session the board started reports its state to the board: the card shows `starting`,
 `working`, `waiting for input` or `ended`, and stands in In progress while the session runs.
 That is the current session for `s` and the new one for `S`. The new session reports through
-this mod, so the mod must load there too (the user-scope install does that). The current session
-reports the same state for every card `s` started in it: it is one session.
+this mod, so the mod must load there too (the user-scope install does that). A session works on
+one card: the card ends when the session ends, on a `/clear`, or when `s` starts another card in
+it. `x` sets a card aside while its session still runs, for work you put off.
 
 Priority is the organization's `Priority` issue field. The card moves with each press; the board
 writes the value 2 seconds after the last press. Where the repository's owner has no such

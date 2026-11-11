@@ -29,10 +29,12 @@ export type Terminal = { app: 'orca' | 'iterm'; id: string }
 
 /**
  * A session the board started. `sessionId` is the id the board gave it, which
- * also names its report; a `/clear` in the session moves it to a new id, which
- * the report carries. `startedAt` is when the board last opened its tab.
+ * also names its report; the report carries the session's own id, which
+ * `claude --resume` takes. `startedAt` is when the board last opened its tab;
+ * `endedAt`, when `x` set the card aside: the session reads as ended from then
+ * on, whatever it reports, until a resume opens its tab again.
  */
-export type SessionRecord = { sessionId: string; terminal: Terminal | null; startedAt: number }
+export type SessionRecord = { sessionId: string; terminal: Terminal | null; startedAt: number; endedAt?: number }
 
 /** The records of one repository by issue number. */
 export type Records = Record<string, SessionRecord[]>
@@ -60,7 +62,14 @@ export function recordsOf(stored: unknown): Records {
     if (!Array.isArray(list)) continue
     const kept = list.flatMap((one: unknown): SessionRecord[] =>
       isObject(one) && typeof one.sessionId === 'string' && typeof one.startedAt === 'number'
-        ? [{ sessionId: one.sessionId, terminal: terminalOf(one.terminal), startedAt: one.startedAt }]
+        ? [
+            {
+              sessionId: one.sessionId,
+              terminal: terminalOf(one.terminal),
+              startedAt: one.startedAt,
+              ...(typeof one.endedAt === 'number' ? { endedAt: one.endedAt } : {}),
+            },
+          ]
         : [],
     )
     if (kept.length > 0) records[number] = kept
@@ -100,8 +109,20 @@ export function withReopened(records: Records, number: number, sessionId: string
   }
 }
 
+/**
+ * The records with every session of the issue set aside at `at` (`x`): each
+ * reads as ended, whatever it reports, until a resume opens its tab again.
+ */
+export function withEnded(records: Records, number: number, at: number): Records {
+  const list = records[String(number)]
+  if (list === undefined) return records
+  return { ...records, [String(number)]: list.map(one => ({ ...one, endedAt: at })) }
+}
+
 /** Where a session stands now, from its last report, or from its start while it has none. */
 export function stateOf(record: SessionRecord, report: Report | null, now: number): SessionState {
+  // Set aside after the board last opened its tab.
+  if (record.endedAt !== undefined && record.endedAt >= record.startedAt) return 'ended'
   // A report from before the board last opened its tab says nothing of this run.
   if (report === null || report.at < record.startedAt) return now - record.startedAt < STARTING_MS ? 'starting' : 'ended'
   if (report.state === 'ended' || now - report.at >= STALE_MS) return 'ended'

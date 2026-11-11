@@ -220,6 +220,9 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       case 'S':
         post({ type: 'start', number: view.number, where: whereOf(event) })
         return
+      case 'x':
+        post({ type: 'release', number: view.number })
+        return
       case 'p':
       case 'P': {
         const action = event.key === 'P' || event.shift === true ? 'clear' : 'cycle'
@@ -270,6 +273,10 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
       case 'S':
         // The hooks module starts it, or says in a toast why it does not.
         if (computed.selected !== null) post({ type: 'start', number: computed.selected, where: whereOf(event) })
+        return
+      case 'x':
+        // The hooks module sets its sessions aside, or says in a toast that none runs.
+        if (computed.selected !== null) post({ type: 'release', number: computed.selected })
         return
       case 'p':
       case 'P':
@@ -337,10 +344,11 @@ const Board: ClientModule<BoardProps, BoardState> = (props, surface) => {
     const startAs = detail === null ? null : placeOf(board ?? null, detail.number).startAs
     // Absent in the props of a hooks module older than this surface module.
     const newTab = (props.startsHere ?? false) ? '  S new tab' : ''
-    const startHint = startAs === null ? '' : `  s ${START_LABEL[startAs]}${startAs === 'start' ? newTab : ''}`
+    const startHint =
+      startAs === null ? '' : `  s ${START_LABEL[startAs]}${startAs === 'start' ? newTab : ''}${startAs === 'focus' ? '  x set aside' : ''}`
     const detailHints = `⌫ back  ↑↓ links, scroll  ⏎ show it${startHint}  o open${priorityHint}`
     // The board cannot tell whether a click gave it the keys (the pane's focus is another thing): it names them always.
-    const hints = detail !== null ? detailHints : `←↑↓→ ⏎ details  s start${newTab}  o open${priorityHint}  r refresh  d done  f filter`
+    const hints = detail !== null ? detailHints : `←↑↓→ ⏎ details  s start${newTab}  x set aside  o open${priorityHint}  r refresh  d done  f filter`
     const left = parts.reduce((sum, part) => sum + cellWidth(part.text), 0)
     const room = size.columns - left - 2
     return (

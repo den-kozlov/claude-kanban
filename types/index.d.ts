@@ -97,6 +97,8 @@ export type BoardMessage =
   | { type: 'priority'; number: number; action: PriorityAction; current: Priority | null }
   /** `where` is absent from a board older than it: a new session. */
   | { type: 'start'; number: number; where?: StartWhere }
+  /** `x`: sets the card aside, its sessions read as ended (spec section 8). */
+  | { type: 'release'; number: number }
 
 /** `p` moves to the next Priority (none → Urgent → … → Low → none), `P` clears it. */
 export type PriorityAction = 'cycle' | 'clear'
@@ -140,8 +142,10 @@ declare module 'claude-code' {
       status: BoardStatus
       pick: SelectRequest | null
       detail: Detail | null
-      /** The record ids this session reports its state under, besides `KANBAN_BOARD_SESSION`: the cards `s` started in it. */
+      /** The record id this session reports its state under, besides `KANBAN_BOARD_SESSION`: the card `s` started in it last (one at most; a list for the old code's state). */
       here: string[]
+      /** The record ids this session stopped reporting under (a `/clear`, another card's `s`, `x`): its `KANBAN_BOARD_SESSION` one stays silent after a reload. */
+      left: string[]
     }
   }
 }

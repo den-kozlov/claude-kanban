@@ -445,6 +445,49 @@ test('s starts a Triage card with /triage in this session and records it; the se
   await board.unmount()
 })
 
+test('this session works on one card: s on another ends the first; x sets it aside, and s starts it here again', async ($, on) => {
+  const { clock, toasts, stored, submitted } = await openBoard($, on, { term: 'Orca' })
+  const board = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const records = () => stored.get('sessions:o/r') as Record<string, { sessionId: string; endedAt?: number }[]>
+  const report = (number: number) => stored.get(`live:${records()[String(number)]?.at(-1)?.sessionId}`) as { state: string }
+  const column = async (pattern: RegExp) => (await board.find({ type: 'Text', text: pattern, in: 'board' }))?.text
+
+  expect(await column(/x set aside/)).toBeDefined()
+  // #3 (Triage), then #1 (Ready for human, the first card now): both here.
+  await board.key({ key: 's', in: 'board' })
+  await clock.settle()
+  await board.key({ key: 's', in: 'board' })
+  await clock.settle()
+  expect(submitted.map(one => one.text)).toEqual(['/triage #3', '/implement #1 (Write the spec)'])
+  expect(report(3).state).toBe('ended')
+  expect(report(1).state).toBe('waiting')
+  await clock.advance(3_000)
+  expect(await column(/^In progress 1/)).toBeDefined()
+  expect(await column(/^Triage 1/)).toBeDefined()
+
+  // #3 (Triage), → #2 (Ready for human), → #1 (In progress): x sets it aside; the session stops reporting under it.
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'right', in: 'board' })
+  await board.key({ key: 'x', in: 'board' })
+  await clock.settle()
+  expect(toasts.at(-1)).toBe('Set #1 aside')
+  expect(records()['1']?.[0]?.endedAt).toBe(NOW + 3_000)
+  expect(report(1).state).toBe('ended')
+  expect(await column(/^In progress 1/)).toBeUndefined()
+  expect(await column(/^Ready for human 2/)).toBeDefined()
+
+  // Back in Ready for human: x has nothing to set aside, s starts it here again.
+  await board.key({ key: 'x', in: 'board' })
+  await clock.settle()
+  expect(toasts.at(-1)).toBe('#1 has no running session')
+  await board.key({ key: 's', in: 'board' })
+  await clock.settle()
+  expect(submitted).toHaveLength(3)
+  expect(records()['1']).toHaveLength(2)
+  expect(report(1).state).toBe('waiting')
+  await board.unmount()
+})
+
 test('S starts a Triage card with /triage in a new Orca tab and records the session', async ($, on) => {
   const { clock, tabs, toasts, stored, submitted } = await openBoard($, on, { term: 'Orca' })
   const board = await $.ui.mount({ ...PANE, surface: 'terminal' })

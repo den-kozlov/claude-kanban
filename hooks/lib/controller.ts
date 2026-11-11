@@ -48,6 +48,7 @@ import {
   recordsOf,
   reportKey,
   reportOf,
+  withEnded,
   withRecord,
   withReopened,
   type Records,
@@ -77,7 +78,7 @@ export function isBoardMessage(data: unknown): data is BoardMessage {
     const isPriority = current === null || ['Urgent', 'High', 'Medium', 'Low'].includes(current as string)
     return (action === 'cycle' || action === 'clear') && isPriority
   }
-  return message.type === 'open' || message.type === 'detail'
+  return message.type === 'open' || message.type === 'detail' || message.type === 'release'
 }
 
 /**
@@ -115,8 +116,13 @@ export type Host = Shell & {
 export type Here = {
   /** Runs `text` as if the person typed it: a slash command, or their prompt; rejects when the session refuses it. */
   submit: (text: string) => Promise<void>
-  /** The session reports its state under `recordId` from now on, a reload included (spec section 8). */
+  /**
+   * The session reports its state under `recordId` from now on, a reload
+   * included, and ends the card it reported under before (spec section 8).
+   */
   track: (recordId: string) => Promise<void>
+  /** The session ends its report under `recordId` and stays silent there, a reload included. */
+  untrack: (recordId: string) => Promise<void>
   /** Whether the session reports under `recordId`. */
   isTracked: (recordId: string) => boolean
 }
@@ -513,6 +519,31 @@ export function createController(): Controller {
   }
 
   /**
+   * `x` (spec section 8): the card's sessions read as ended from now on,
+   * whatever they report, until a resume. One that reports from this session
+   * stops. The card goes back to the column its labels give it.
+   */
+  const releaseCard = async (to: Host, number: number) => {
+    const at = repo
+    const session = at === null ? null : issueSession(number, await to.now())
+    if (at === null || session === null || session.state === 'ended') {
+      to.toast(`#${number} has no running session`)
+      return
+    }
+    try {
+      for (const one of records?.[String(number)] ?? []) {
+        if (to.here?.isTracked(one.sessionId) === true) await to.here.untrack(one.sessionId)
+      }
+      const now = await to.now()
+      await saveRecords(to, at, kept => withEnded(kept, number, now))
+      await publish(to)
+      to.toast(`Set #${number} aside`)
+    } catch (error) {
+      to.toast(`Could not set #${number} aside: ${messageOf(error)}`)
+    }
+  }
+
+  /**
    * `s` / `S` (spec section 7): a running session's tab comes forward; In
    * progress and Review resume the last session; the label columns start the
    * prompt their labels call for. `s` (`here`) submits it in the session the
@@ -599,6 +630,7 @@ export function createController(): Controller {
       if (message.type === 'back') closeDetail(to)
       if (message.type === 'priority') void changePriority(to, message.number, message.action, message.current)
       if (message.type === 'start') void startCard(to, message.number, message.where ?? 'new')
+      if (message.type === 'release') void releaseCard(to, message.number)
     },
   }
 }

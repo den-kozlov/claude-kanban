@@ -5,6 +5,7 @@ import {
   recordsOf,
   reportOf,
   stateOf,
+  withEnded,
   withRecord,
   withReopened,
   type Report,
@@ -29,6 +30,8 @@ describe('session records', () => {
         { sessionId: 'b', terminal: null, startedAt: 2 },
         { sessionId: 'c', terminal: { app: 'iterm', id: 'X' }, startedAt: 3 },
         { terminal: null, startedAt: 4 },
+        { sessionId: 'd', terminal: null, startedAt: 5, endedAt: 6 },
+        { sessionId: 'e', terminal: null, startedAt: 7, endedAt: 'soon' },
       ],
       '4': 'nonsense',
     }
@@ -38,6 +41,8 @@ describe('session records', () => {
         { sessionId: 'a', terminal: { app: 'orca', id: 'term_1' }, startedAt: 1 },
         { sessionId: 'b', terminal: null, startedAt: 2 },
         { sessionId: 'c', terminal: { app: 'iterm', id: 'X' }, startedAt: 3 },
+        { sessionId: 'd', terminal: null, startedAt: 5, endedAt: 6 },
+        { sessionId: 'e', terminal: null, startedAt: 7 },
       ],
     })
     expect(recordsOf(null)).toEqual({})
@@ -61,6 +66,15 @@ describe('session records', () => {
     expect(reopened['3']?.[0]).toEqual({ sessionId: 'a', terminal: { app: 'iterm', id: 'X' }, startedAt: NOW })
     expect(reopened['3']?.[1]).toEqual(record('b'))
   })
+
+  test('x sets every session of the issue aside, and only of that issue', async () => {
+    const records = { '3': [record('a'), record('b')], '4': [record('c')] }
+    const ended = withEnded(records, 3, NOW)
+
+    expect(ended['3']?.map(one => one.endedAt)).toEqual([NOW, NOW])
+    expect(ended['4']).toEqual([record('c')])
+    expect(withEnded(records, 5, NOW)).toBe(records)
+  })
 })
 
 describe('session state', () => {
@@ -73,6 +87,14 @@ describe('session state', () => {
     expect(stateOf(record('a'), report('working', NOW - 30_000), NOW)).toBe('ended')
     // A report from before a resume says nothing of the resumed run.
     expect(stateOf(record('a', NOW - 1_000), report('ended', NOW - 5_000), NOW)).toBe('starting')
+  })
+
+  test('a session set aside reads as ended, whatever it reports, until a resume opens its tab again', async () => {
+    const aside = { ...record('a'), endedAt: NOW - 10_000 }
+
+    expect(stateOf(aside, report('working', NOW - 1_000), NOW)).toBe('ended')
+    const resumed = withReopened({ '3': [aside] }, 3, 'a', null, NOW - 5_000)['3']?.[0] as SessionRecord
+    expect(stateOf(resumed, report('working', NOW - 1_000), NOW)).toBe('working')
   })
 
   test('the issue shows the session that needs the person first, and resumes the last one by its id now', async () => {

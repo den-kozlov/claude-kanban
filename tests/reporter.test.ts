@@ -63,12 +63,22 @@ test('a session the board started reports its state under its record id', async 
   expect(state()).toBe('ended')
 })
 
-test('a /clear does not end the report', async ($, on) => {
+test('a /clear ends the report, which names the cleared session; it stays ended past turns, heartbeats and a reload', async ($, on) => {
   const { clock, stored } = await startSession($, on, { KANBAN_BOARD_SESSION: 'rec-1' })
   await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } })
   await clock.settle()
+  const ended = { state: 'ended', at: NOW, sessionId: 'session-1' }
+  expect(stored.get('live:rec-1')).toEqual(ended)
 
-  expect((stored.get('live:rec-1') as { state: string }).state).toBe('waiting')
+  // The process goes on: its turns and heartbeats say nothing of the card.
+  await $.turn.start({ text: 'something else', turnId: 't1' })
+  await clock.advance(10_000)
+  expect(stored.get('live:rec-1')).toEqual(ended)
+
+  // A reload runs session.start again, with the same environment: the record stays silent.
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await clock.advance(10_000)
+  expect(stored.get('live:rec-1')).toEqual(ended)
 })
 
 test('a session the board did not start reports nothing', async ($, on) => {

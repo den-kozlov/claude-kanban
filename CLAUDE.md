@@ -8,8 +8,8 @@ A Claude Code mod (a plugin of function hooks) named `kanban-board`: a kanban bo
 repository's GitHub issues in a pane beside the transcript, opened and closed with `/board`. The
 design is `docs/spec.md`; its section 12 is the delivery plan and a table of what is built.
 Stages 1 (read-only board), 2 (detail view), 3 (Priority writes), 4 (starting cards), 5
-(session tracking), 6 (the config file), 7 (the terminal board, `bin/kanban-board`) and 8 (`s` in
-the current session, `S` in a new one) are built.
+(session tracking), 6 (the config file), 7 (the terminal board, `bin/kanban-board`), 8 (`s` in
+the current session, `S` in a new one) and 9 (one card per session, `x` sets a card aside) are built.
 
 The repository root is the plugin folder. The plugin name cannot start with `claude-` (the
 validator reserves it), so the repo is `claude-kanban` and the plugin `kanban-board`; the
@@ -44,6 +44,8 @@ Two runtimes talk through messages:
   reporter in every session: one whose environment has `KANBAN_BOARD_SESSION` (the board puts it
   in the tab's command), or in which `s` started cards (their record ids in the `here` state),
   writes its state to `$.store` under `live:<record id>`, and the board reads it with the branches.
+  A session reports under one card: any `session.end` (a `/clear` too), another card's `s` or `x`
+  ends it, and the ids it left (`left` state) stay silent after a reload.
 - `hooks/lib/controller.ts`, the board's background work, with no `$`: it keeps the data fresh while
   the board is open (GitHub every 60 s, local branches every 3 s) and writes the built board and
   the refresh status through the `Host`. It loads the issue the detail view shows into the
@@ -53,12 +55,12 @@ Two runtimes talk through messages:
   `s` (`where: 'here'`) in the session the board runs in, `S` (`'new'`, and `s` in the terminal
   board, whose `Host` has no `here`) as a new `claude` in an Orca or iTerm tab; both recorded in
   `$.store`. On a card with a session, both focus a running session's tab and resume an ended one.
-  `handle` takes what the board posts.
+  `x` sets a card aside (`endedAt` in its records). `handle` takes what the board posts.
 - `hooks/board.tsx`, the `Client`'s surface module. It runs on the drawing thread with no `$`. It owns
   what belongs to the viewer: the selection, Done shown or hidden, the container filter, each
   column's scroll window and where the detail view is scrolled to. It draws the detail view in
   place of the columns while `detail` is set. It handles raw keys and pointer events, and posts
-  `refresh` / `open` / `detail` / `back` / `priority` / `start` to the hooks module (`ui.message`).
+  `refresh` / `open` / `detail` / `back` / `priority` / `start` / `release` to the hooks module (`ui.message`).
   Keys reach it only after the person clicks the board.
 - `tui/`, the terminal board: the same `board.tsx` and controller outside Claude Code, on Bun.
   `client.ts` is a `Client` surface (state, keys, pointer, `post`) over `render.ts`, which lays out

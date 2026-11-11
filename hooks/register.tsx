@@ -19,18 +19,21 @@ const status = atom({ plugin: 'kanban-board', key: 'status' } as const, { isLoad
 const pick = atom({ plugin: 'kanban-board', key: 'pick' } as const, null)
 const detail = atom({ plugin: 'kanban-board', key: 'detail' } as const, null)
 const here = atom({ plugin: 'kanban-board', key: 'here' } as const, [])
+const left = atom({ plugin: 'kanban-board', key: 'left' } as const, [])
 
 /**
  * What a session the board started says of itself (spec section 8): its
- * state, the reports it writes it under (one per card it works on) and the
- * write that keeps them fresh.
+ * state, the record ids it writes it under and the write that keeps them fresh.
  */
 type Reporter = {
   state: Report['state']
-  keys: string[]
+  recordIds: string[]
   write: () => Promise<void>
   timer: Timer
 }
+
+/** A write of `state` under fixed record ids; `sessionId`, the id it names (else the session's own now). */
+type Fixed = { state: Report['state']; recordIds: string[]; sessionId?: string }
 
 export const register: Register = on => {
   // The refresh, the detail view, the Priority writes and starting cards: the terminal board runs the same.
@@ -41,6 +44,8 @@ export const register: Register = on => {
   let reporter: Reporter | null = null
   // Whether the main loop's turn runs: a tool after a permission prompt is working again, one after the turn is not.
   let isInTurn = false
+  // Ends this session's reports under the record ids (all of them by default), the last one written `ended`; bound at `session.start`.
+  let leave: (recordIds?: string[], sessionId?: string) => Promise<void> = async () => undefined
 
   /** Records this session's state for the board, when the board started it and the state changed. */
   const report = (state: Report['state']) => {
@@ -53,23 +58,38 @@ export const register: Register = on => {
     reporter?.timer.cancel()
     reporter = null
     let writes = Promise.resolve()
-    const write = () => {
+    const write = (fixed?: Fixed) => {
       // One write after another, each with the state at its turn: the last one written is the newest.
       writes = writes
         .then(async () => {
-          const mine = reporter
+          const mine = fixed ?? reporter
           if (mine === null) return
-          const value: Report = { state: mine.state, at: await $.clock.now(), sessionId: await $.session.id() }
-          for (const key of mine.keys) await $.store.set(key, value)
+          const value: Report = { state: mine.state, at: await $.clock.now(), sessionId: fixed?.sessionId ?? (await $.session.id()) }
+          for (const id of mine.recordIds) await $.store.set(reportKey(id), value)
         })
         .catch(() => undefined)
       return writes
     }
     /** Reports under the record ids too, from `state` on when this session reported nothing yet. */
     const reportUnder = (recordIds: string[], state: Report['state']) => {
-      reporter ??= { state, keys: [], write, timer: $.clock.every(HEARTBEAT_MS, () => void write()) }
-      reporter.keys = [...new Set([...reporter.keys, ...recordIds.map(reportKey)])]
+      reporter ??= { state, recordIds: [], write: () => write(), timer: $.clock.every(HEARTBEAT_MS, () => void write()) }
+      reporter.recordIds = [...new Set([...reporter.recordIds, ...recordIds])]
       return write()
+    }
+    leave = async (recordIds, sessionId) => {
+      const mine = reporter
+      const gone = mine?.recordIds.filter(id => recordIds?.includes(id) ?? true) ?? []
+      if (mine === null || gone.length === 0) return
+      mine.recordIds = mine.recordIds.filter(id => !gone.includes(id))
+      if (mine.recordIds.length === 0) {
+        mine.timer.cancel()
+        reporter = null
+      }
+      // The report first: a session that exits may not get to the rest.
+      await write({ state: 'ended', recordIds: gone, sessionId })
+      // After a reload too: `session.start` reads `KANBAN_BOARD_SESSION` again, but not these.
+      await update($, here, ids => ids.filter(id => !gone.includes(id)))
+      await update($, left, ids => [...new Set([...ids, ...gone])])
     }
 
     const host: Host = {
@@ -100,11 +120,14 @@ export const register: Register = on => {
           const entered = await $.prompt.submit({ text, asUser: true })
           if (entered.drop !== undefined) throw new Error(entered.drop)
         },
+        // One card at a time: the one it worked on before ends.
         track: async recordId => {
-          await update($, here, ids => [...ids, recordId])
+          await leave()
+          await update($, here, () => [recordId])
           await reportUnder([recordId], isInTurn ? 'working' : 'waiting')
         },
-        isTracked: recordId => reporter?.keys.includes(reportKey(recordId)) === true,
+        untrack: recordId => leave([recordId]),
+        isTracked: recordId => reporter?.recordIds.includes(recordId) === true,
       },
     }
     const termProgram = await $.env.get('TERM_PROGRAM').catch(() => undefined)
@@ -118,10 +141,13 @@ export const register: Register = on => {
     if ((await $.ui.panes()).some(pane => pane.id === PANE)) controller.start()
 
     // The reporter (spec section 8): a session the board started finds its record id in the
-    // environment, a session `s` started cards in finds theirs in `$.state` (after a reload);
-    // it writes its state under each until it ends.
+    // environment, a session `s` started a card in finds its own in `$.state` (after a reload);
+    // it writes its state under each until it ends, a `/clear` or another card's `s` ends it, or `x`.
     const recordId = e.isInteractive ? await $.env.get('KANBAN_BOARD_SESSION').catch(() => undefined) : undefined
-    const recordIds = [...(recordId === undefined || recordId === '' ? [] : [recordId]), ...(await read($, here))]
+    const gone = await read($, left)
+    const recordIds = [...(recordId === undefined || recordId === '' ? [] : [recordId]), ...(await read($, here))].filter(
+      id => !gone.includes(id),
+    )
     if (recordIds.length > 0) {
       const previous = reportOf(await $.store.get(reportKey(recordIds[0] as string)).catch(() => undefined))
       const now = await $.clock.now()
@@ -165,14 +191,10 @@ export const register: Register = on => {
   })
     .catch(() => undefined)
 
+  // Any end, a `/clear` too: the conversation that knew the card is gone. The report names the
+  // ending session, the one `claude --resume` returns to the card in.
   on('session.end', async ($, e, next) => {
-    const mine = reporter
-    // After a `/clear` the process goes on under a new id, the same tab, the same issue.
-    if (mine !== null && e.reason !== 'clear') {
-      mine.timer.cancel()
-      mine.state = 'ended'
-      await mine.write()
-    }
+    await leave(undefined, e.sessionId)
     return next(e)
   })
 

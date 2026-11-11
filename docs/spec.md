@@ -127,6 +127,7 @@ As built (stage 3):
 | `Enter` | open the detail view of the card |
 | `s` | start the card in the current session (section 7) |
 | `S` | start the card in a new session (section 7) |
+| `x` | set the card aside: its sessions read as ended (section 8) |
 | `o` | open the issue in the browser |
 | `p` / `P` | cycle / clear Priority |
 | `f` | choose a container filter |
@@ -144,7 +145,7 @@ body, the last three comments; `s`/`S` start, `o` opens in the browser, `p`/`P` 
 | `PgUp` / `PgDn` / `Space`, `Home` / `End` | scroll |
 | `←` / `→`, `Tab` | the next link, wherever it is |
 | `Enter`, mouse click on a link | show that issue |
-| `s` / `S`, `o`, `p` / `P`, `r` | as on the board, for the issue shown |
+| `s` / `S`, `x`, `o`, `p` / `P`, `r` | as on the board, for the issue shown |
 
 As built (stage 2, reworked after stage 5): stage 2 drew the issue in a second pane (`issue`,
 opened with `focus` and `closeOnEscape`). The owner found that after `Esc` the board took no keys
@@ -304,6 +305,27 @@ As built (stage 8):
 - The session follows its main loop's turns always (working, or not), so a card `s` starts in
   the middle of a turn reports `working` from the start.
 
+As built (stage 9, a session works on one card; the owner's choice, 2026-11-11). Before it, a
+card stayed in In progress after its work stopped, and `s` on it said `#N runs in this session`
+in a session that had long moved on:
+- A session reports under one card at most. Its card ends (the report says `ended`) when:
+  - the session ends for any reason, a `/clear` included. After a `/clear` the conversation that
+    knew the card is gone, and the board cannot tell what the person does next. The `ended`
+    report names the ending session, so `s` resumes the conversation that knew the card. This
+    holds in a tab the board opened too: stage 5 kept such a session reporting after a `/clear`.
+  - `s` starts another card in the same session: the new card replaces it.
+  - `x` sets the card aside.
+- The session keeps the record ids it stopped reporting under in its `$.state` (`left`); after a
+  reload `session.start` skips them, its `KANBAN_BOARD_SESSION` one included. `here` holds the one
+  card `s` started in it.
+- `x` on a card with a running session (starting, working, waiting) writes `endedAt` into each of
+  its records, and the session that reports from the board's own session stops. A record with
+  `endedAt` at or after `startedAt` reads as ended, whatever its session reports; a resume sets a
+  new `startedAt` and so undoes it. The card goes back to the column its labels give it (a branch
+  or a PR keeps it in In progress or Review), and `s` starts it again. A session in another tab
+  goes on reporting, unread, until it ends. On a card with no running session `x` says so.
+- The hints read `x set aside` on the board, and in the detail view of a card whose session runs.
+
 ## 9. Issue query
 
 `gh api graphql --paginate -F owner=<o> -F name=<r> -F query=@issues.graphql` (the variable must
@@ -424,6 +446,7 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 6. Configuration file.
 7. Terminal board: the same board outside Claude Code.
 8. Start here: `s` starts a card in the current session, `S` in a new one.
+9. One card per session: a `/clear` or another card's `s` ends the card, `x` sets it aside.
 
 | Stage | State | Built | Left for later |
 |---|---|---|---|
@@ -435,6 +458,7 @@ From the bundled `plugin-authoring` skill and its `types/claude-code.d.ts`, whic
 | 6. Configuration file | done | Section 10: `.claude/kanban.json` read at each refresh from the worktree root, merged over the defaults part by part, wrong parts skipped and named in a toast; later `exclude` and the label rules of all eight columns (section 2) | — |
 | 7. Terminal board | done | `bin/kanban-board [folder]` on Bun: the pane's surface module and background work (moved to `hooks/lib/controller.ts`) in a full-screen terminal; keys without a click, `Esc` back, `q` quits, mouse clicks and wheel, toasts in the bottom line; the mod's store file shared with the pane | A Node build without Bun (not planned) |
 | 8. Start here | done | Section 7: `s` runs the card's prompt in the board's session (a slash command with `$.command.run`, other text with `$.prompt.submit`), recorded and reported (section 8); `S` starts it in a new tab; the same focus and resume for both; the hints | — |
+| 9. One card per session | done | Section 8: a session reports under one card, which ends with the session, a `/clear` or another card's `s`; `x` sets a card aside on the board and in the detail view; the hints | — |
 
 ## 13. Open checks for implementation
 
